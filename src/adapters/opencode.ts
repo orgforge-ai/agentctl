@@ -20,47 +20,81 @@ import {
   type RunCommandInput,
   type CommandSpec,
 } from "./base.js";
-import { fileExists, readTextFile, contentHash } from "../util/index.js";
+import { fileExists, readTextFile } from "../util/index.js";
 
 const execFileAsync = promisify(execFile);
 
-function parseClaudeAgentFrontmatter(
-  content: string,
-): Record<string, unknown> {
+function parseYamlFrontmatter(content: string): Record<string, unknown> {
   const normalized = content.replace(/\r\n/g, "\n");
   const match = normalized.match(/^---\n([\s\S]*?)\n---/);
   if (!match) return {};
   const frontmatter: Record<string, unknown> = {};
+  let currentKey: string | null = null;
+  let currentMap: Record<string, unknown> | null = null;
+
   for (const line of match[1].split("\n")) {
+    // Nested key (indented)
+    if (currentKey && /^\s+/.test(line)) {
+      const colonIdx = line.indexOf(":");
+      if (colonIdx === -1) continue;
+      const key = line.slice(0, colonIdx).trim();
+      const value = parseYamlValue(line.slice(colonIdx + 1).trim());
+      if (!currentMap) currentMap = {};
+      currentMap[key] = value;
+      frontmatter[currentKey] = currentMap;
+      continue;
+    }
+
+    // Flush previous nested map
+    currentKey = null;
+    currentMap = null;
+
     const colonIdx = line.indexOf(":");
     if (colonIdx === -1) continue;
     const key = line.slice(0, colonIdx).trim();
-    let value: unknown = line.slice(colonIdx + 1).trim();
-    if (value === "true") value = true;
-    else if (value === "false") value = false;
-    else if (typeof value === "string" && value.startsWith('"') && value.endsWith('"')) {
-      value = value.slice(1, -1);
+    const rest = line.slice(colonIdx + 1).trim();
+
+    if (rest === "") {
+      // Start of a nested map
+      currentKey = key;
+      currentMap = {};
+      frontmatter[key] = currentMap;
+    } else {
+      frontmatter[key] = parseYamlValue(rest);
     }
-    frontmatter[key] = value;
   }
   return frontmatter;
+}
+
+function parseYamlValue(value: string): unknown {
+  if (value === "true") return true;
+  if (value === "false") return false;
+  if (value.startsWith('"') && value.endsWith('"')) return value.slice(1, -1);
+  return value;
 }
 
 function stripFrontmatter(content: string): string {
   return content.replace(/\r\n/g, "\n").replace(/^---\n[\s\S]*?\n---\n*/, "");
 }
 
-export class ClaudeAdapter implements HarnessAdapter {
-  id = "claude";
-  displayName = "Claude Code";
+function globalConfigDir(): string {
+  return path.join(
+    process.env.XDG_CONFIG_HOME ?? path.join(process.env.HOME ?? "~", ".config"),
+    "opencode",
+  );
+}
+
+export class OpenCodeAdapter implements HarnessAdapter {
+  id = "opencode";
+  displayName = "OpenCode";
 
   async detect(_context: AdapterContext): Promise<DetectionResult> {
     try {
-      const { stdout } = await execFileAsync("claude", ["--version"]);
+      const { stdout } = await execFileAsync("opencode", ["--version"]);
       return {
         installed: true,
         version: stdout.trim(),
-        binaryPath: "claude",
+        binaryPath: "opencode",
       };
     } catch {
       return { installed: false };
@@ -78,12 +112,8 @@ export class ClaudeAdapter implements HarnessAdapter {
 
   resolveInstallPaths(context: AdapterContext): HarnessPaths {
     return {
-      projectAgentsDir: path.join(context.projectRoot, ".claude", "agents"),
-      globalAgentsDir: path.join(
-        process.env.HOME ?? "~",
-        ".claude",
-        "agents",
-      ),
+      projectAgentsDir: path.join(context.projectRoot, ".opencode", "agents"),
+      globalAgentsDir: path.join(globalConfigDir(), "agents"),
     };
   }
 
@@ -123,31 +153,41 @@ export class ClaudeAdapter implements HarnessAdapter {
     const { agent, context } = input;
     const parts: string[] = [];
 
-    // Build frontmatter
-    const fm: Record<string, string> = {};
-    if (agent.manifest.name) fm["name"] = `"${agent.manifest.name}"`;
+    // Build YAML frontmatter
+    const fmLines: string[] = [];
     if (agent.manifest.description)
-      fm["description"] = `"${agent.manifest.description}"`;
+      fmLines.push(`description: "${agent.manifest.description}"`);
+
+    // Resolve model class to opencode-specific model
     if (agent.manifest.defaultModelClass) {
       const modelClass = agent.manifest.defaultModelClass;
       const mapping = context.models.modelClasses[modelClass];
-      const claudeModel = mapping?.["claude"];
-      if (claudeModel) fm["model"] = claudeModel;
+      const opencodeModel = mapping?.["opencode"];
+      if (opencodeModel) fmLines.push(`model: ${opencodeModel}`);
     }
 
-    const overrides = agent.manifest.adapterOverrides?.["claude"] ?? {};
-    if (overrides["color"]) fm["color"] = String(overrides["color"]);
+    // Apply adapter overrides
+    const overrides = agent.manifest.adapterOverrides?.["opencode"] ?? {};
+    if (overrides["mode"]) fmLines.push(`mode: ${overrides["mode"]}`);
+    if (overrides["temperature"] !== undefined)
+      fmLines.push(`temperature: ${overrides["temperature"]}`);
 
-    if (Object.keys(fm).length > 0) {
-      parts.push("---");
-      for (const [k, v] of Object.entries(fm)) {
-        parts.push(`${k}: ${v}`);
+    // Tools block
+    const tools = overrides["tools"] as Record<string, boolean> | undefined;
+    if (tools && Object.keys(tools).length > 0) {
+      fmLines.push("tools:");
+      for (const [tool, enabled] of Object.entries(tools)) {
+        fmLines.push(`  ${tool}: ${enabled}`);
       }
+    }
+
+    if (fmLines.length > 0) {
+      parts.push("---");
+      parts.push(...fmLines);
       parts.push("---");
       parts.push("");
     }
 
-    // Add prompt content
     if (agent.prompt) {
       parts.push(agent.prompt);
     }
@@ -162,7 +202,7 @@ export class ClaudeAdapter implements HarnessAdapter {
   }
 
   async importAgents(context: AdapterContext): Promise<ImportedAgent[]> {
-    const agentsDir = path.join(context.projectRoot, ".claude", "agents");
+    const agentsDir = path.join(context.projectRoot, ".opencode", "agents");
     if (!(await fileExists(agentsDir))) return [];
 
     const entries = await fs.readdir(agentsDir, { withFileTypes: true });
@@ -175,7 +215,7 @@ export class ClaudeAdapter implements HarnessAdapter {
       const content = await readTextFile(path.join(agentsDir, entry.name));
       if (!content) continue;
 
-      const frontmatter = parseClaudeAgentFrontmatter(content);
+      const frontmatter = parseYamlFrontmatter(content);
       const prompt = stripFrontmatter(content);
 
       imported.push({
@@ -185,7 +225,7 @@ export class ClaudeAdapter implements HarnessAdapter {
             ? frontmatter["description"]
             : null,
         prompt: prompt.trim() || null,
-        modelClass: undefined, // reverse mapping would need model tables
+        modelClass: undefined,
         metadata: frontmatter,
       });
     }
@@ -198,7 +238,6 @@ export class ClaudeAdapter implements HarnessAdapter {
     const actions: SyncFileAction[] = [];
     const warnings: string[] = [];
 
-    // Render and write each managed agent
     for (const [name, agent] of context.agents) {
       const rendered = await this.renderAgent({ agent, context });
       for (const file of rendered) {
@@ -233,7 +272,6 @@ export class ClaudeAdapter implements HarnessAdapter {
       }
     }
 
-    // Detect unmanaged agents in harness directory
     if (await fileExists(paths.projectAgentsDir)) {
       const entries = await fs.readdir(paths.projectAgentsDir, {
         withFileTypes: true,
@@ -256,12 +294,13 @@ export class ClaudeAdapter implements HarnessAdapter {
     const args: string[] = [];
 
     if (input.headless) {
+      args.push("run");
       if (input.prompt) {
-        args.push("-p", input.prompt);
+        args.push(input.prompt);
       } else if (input.promptFile) {
         const content = await readTextFile(input.promptFile);
         if (!content) throw new Error(`Cannot read prompt file: ${input.promptFile}`);
-        args.push("-p", content);
+        args.push(content);
       } else {
         throw new Error("Headless mode requires --prompt or --prompt-file");
       }
@@ -273,25 +312,21 @@ export class ClaudeAdapter implements HarnessAdapter {
 
     if (input.model) {
       const mapping = input.context.models.modelClasses[input.model];
-      const claudeModel = mapping?.["claude"];
-      if (claudeModel) {
-        args.push("--model", claudeModel);
+      const opencodeModel = mapping?.["opencode"];
+      if (opencodeModel) {
+        args.push("-m", opencodeModel);
       } else if (!input.degradedOk) {
         throw new Error(
-          `No Claude mapping for model class "${input.model}"`,
+          `No OpenCode mapping for model class "${input.model}"`,
         );
       }
     }
 
-    if (input.cwd) {
-      args.push("--cwd", input.cwd);
-    }
-
     return {
-      command: "claude",
+      command: "opencode",
       args,
       env: input.env,
-      cwd: input.cwd,
+      cwd: input.cwd ?? input.context.projectRoot,
     };
   }
 }
