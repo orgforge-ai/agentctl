@@ -1,0 +1,25 @@
+{
+  "name": "agentctl",
+  "version": "0.1.0",
+  "description": "Portable control plane for coding-agent harnesses",
+  "type": "module",
+  "bin": {
+    "agentctl": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/cli/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "commander": "^13.1.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

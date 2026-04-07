@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "modelClasses": {
+    "small": {
+      "claude": "haiku"
+    },
+    "medium": {
+      "claude": "sonnet"
+    },
+    "large": {
+      "claude": "opus"
+    },
+    "planning": {
+      "claude": "opus"
+    },
+    "editing": {
+      "claude": "sonnet"
+    },
+    "reasoning": {
+      "claude": "opus"
+    }
+  }
+}
