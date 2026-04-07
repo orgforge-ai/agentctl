@@ -43,7 +43,7 @@ export async function syncHarness(
   // Update sync manifest for written files
   if (!options.dryRun) {
     for (const action of result.actions) {
-      if (action.action === "write") {
+      if (action.action === "write" || (action.action === "skip" && action.reason === "unchanged")) {
         const agentName = result.actions.find(
           (a) => a.path === action.path,
         )?.path;

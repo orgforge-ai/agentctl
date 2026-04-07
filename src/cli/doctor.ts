@@ -2,7 +2,7 @@ import * as path from "node:path";
 import { loadConfig } from "../config/index.js";
 import { loadAgents } from "../resources/agents/index.js";
 import { getAllAdapters } from "../adapters/registry.js";
-import { loadSyncManifest } from "../sync/state.js";
+import { loadSyncManifest, getManagedNames } from "../sync/state.js";
 import { fileExists, readTextFile, contentHash } from "../util/index.js";
 
 interface CheckResult {
@@ -54,6 +54,7 @@ export async function runDoctor(): Promise<void> {
   });
 
   // Check 5: harness detection
+  const manifest = await loadSyncManifest(config.projectRoot);
   const adapters = getAllAdapters();
   for (const adapter of adapters) {
     const context = {
@@ -61,6 +62,7 @@ export async function runDoctor(): Promise<void> {
       globalDir: config.globalDir,
       projectDir: config.projectDir,
       models: config.models,
+      managedNames: getManagedNames(manifest, adapter.id),
     };
 
     const detection = await adapter.detect(context);
@@ -86,7 +88,6 @@ export async function runDoctor(): Promise<void> {
   }
 
   // Check 6: sync drift
-  const manifest = await loadSyncManifest(config.projectRoot);
   let driftCount = 0;
   for (const entry of manifest.entries) {
     const content = await readTextFile(entry.filePath);

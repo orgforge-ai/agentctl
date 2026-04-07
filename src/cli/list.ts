@@ -1,6 +1,7 @@
 import { loadConfig } from "../config/index.js";
 import { loadAgents } from "../resources/agents/index.js";
 import { getAdapter } from "../adapters/registry.js";
+import { loadSyncManifest, getManagedNames } from "../sync/state.js";
 
 export async function runList(
   resourceKind: string,
@@ -51,11 +52,13 @@ export async function runHarnessList(
   }
 
   const config = await loadConfig();
+  const manifest = await loadSyncManifest(config.projectRoot);
   const context = {
     projectRoot: config.projectRoot,
     globalDir: config.globalDir,
     projectDir: config.projectDir,
     models: config.models,
+    managedNames: getManagedNames(manifest, harnessId),
   };
 
   const installed = await adapter.listInstalled(context);

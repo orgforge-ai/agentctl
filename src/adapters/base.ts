@@ -6,6 +6,7 @@ export interface AdapterContext {
   globalDir: string;
   projectDir: string;
   models: ModelsConfig;
+  managedNames?: Set<string>;
 }
 
 export interface DetectionResult {

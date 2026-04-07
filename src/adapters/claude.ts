@@ -99,7 +99,7 @@ export class ClaudeAdapter implements HarnessAdapter {
         agents.push({
           name,
           path: path.join(dir, entry.name),
-          managed: false, // will be updated by sync state check
+          managed: context.managedNames?.has(name) ?? false,
         });
       }
     }
@@ -109,8 +109,6 @@ export class ClaudeAdapter implements HarnessAdapter {
 
   async listUnmanaged(context: AdapterContext): Promise<UnmanagedResource[]> {
     const installed = await this.listInstalled(context);
-    // Without sync state, all installed agents are considered unmanaged
-    // The sync command updates this based on the sync manifest
     return installed.agents
       .filter((a) => !a.managed)
       .map((a) => ({
