@@ -6,7 +6,7 @@
 
 It provides:
 
-- one cross-platform source of truth for agents, skills, and possibly plugins
+- one cross-platform source of truth for agent definitions and model mappings
 - one normalized CLI for interactive and headless execution
 - adapter-based synchronization into harness-specific config/layouts
 - provider-agnostic model aliases such as `small`, `medium`, and `large`
@@ -20,16 +20,23 @@ It does not try to pretend all harnesses are identical. Where capabilities diffe
 - lossless round-tripping from harness-native config back into `.agentctl`
 - hiding every provider-specific detail
 - managing arbitrary non-coding agent runtimes from day one
+- managing runtime state such as session history, memory, or task logs (these remain harness-managed)
 
 ## Core Idea
 
-`.agentctl/` and `~/.agentctl/` become the canonical source of truth.
+`.agentctl/` and `~/.agentctl/` become the canonical source of truth for agent definitions and model mappings.
 
 - `~/.agentctl/` is the global layer
 - `<repo>/.agentctl/` is the project layer
 - harness-native folders such as `.claude/`, `.codex/`, and `.opencode/` are generated or synchronized artifacts
 
 This is intentionally similar to how Terraform treats provider state and generated artifacts: user-owned config lives in one place, adapter-owned outputs live elsewhere.
+
+### Ownership Boundary
+
+agentctl manages **agent definitions** (prompts, metadata, model preferences) — the static, declarative parts. Runtime state such as session history, agent memory, and task logs remains harness-managed. Each harness stores memory in its own location (e.g., Claude Code uses `~/.claude/projects/<path>/memory/`), and agentctl does not read, write, or migrate that state.
+
+This keeps the sync model one-directional: agentctl pushes definitions into harness directories, never pulls runtime state back.
 
 ## Primary Use Cases
 
@@ -49,9 +56,8 @@ Global:
   config.json
   models.json
   agents/
-  skills/
-  plugins/
   adapters/
+  state/            # sync state, gitignored, keyed per project
 ```
 
 Project:
@@ -61,8 +67,6 @@ Project:
   config.json
   models.json
   agents/
-  skills/
-  plugins/
 ```
 
 Generated harness artifacts:
@@ -76,12 +80,13 @@ Generated harness artifacts:
 Notes:
 
 - project config overrides global config
-- project agents/skills augment or shadow global entries by name
+- project agents augment or shadow global entries by name
 - generated harness directories should be safe to recreate
+- `~/.agentctl/state/` tracks sync metadata and is never committed to version control
 
 ## Resource Model
 
-There are three portable resource kinds:
+v1 has one portable resource kind: **agents**. Skills and plugins are deferred to later stages (see `FUTURE.md`).
 
 ### Agents
 
@@ -108,41 +113,11 @@ Example fields:
 - `executionHints`
 - `adapterOverrides`
 
-### Skills
-
-Portable unit that can be global or project-local.
-
-Suggested shape:
-
-```text
-.agentctl/skills/<name>/
-  skill.json
-  SKILL.md
-  assets/
-  scripts/
-```
-
-This mirrors existing skill conventions closely enough that agentctl can import/export rather than inventing a totally foreign format.
-
-### Plugins
-
-This should be included in the design, but likely start as an experimental adapter surface rather than a hard promise.
-
-Reason:
-
-- plugins appear more harness-specific than agents and skills
-- plugin packaging and lifecycle semantics may differ much more across harnesses
-
-Recommendation:
-
-- define a portable plugin manifest now
-- mark plugin sync support as per-adapter and optional in v1
-
 ## Configuration Layers
 
 There should be three config layers:
 
-1. built-in defaults shipped with `agentctl`
+1. built-in defaults shipped with `agentctl` (including starter model mappings)
 2. global config in `~/.agentctl/`
 3. project config in `<repo>/.agentctl/`
 
@@ -150,7 +125,7 @@ Merge rule:
 
 - maps merge by key
 - scalar project values override global values
-- named resources shadow by name at the project level
+- named resources (agents) shadow by name at the project level
 - adapter-specific arrays are replace, not append, unless explicitly marked mergeable
 
 ## Models
@@ -187,9 +162,11 @@ Example:
 }
 ```
 
-Important constraint:
+Important constraints:
 
-portable classes should be semantic, not marketing-derived. `small` and `planning` are stable abstractions; provider model names are not.
+- portable classes should be semantic, not marketing-derived. `small` and `planning` are stable abstractions; provider model names are not.
+- model mappings are **user-owned**. `agentctl init` scaffolds sensible defaults, but the user maintains their `models.json`. agentctl does not auto-update mappings when providers ship new models.
+- project `models.json` overrides global `models.json` per the standard merge rules.
 
 ## Adapter Architecture
 
@@ -204,9 +181,9 @@ export interface HarnessAdapter {
   capabilities(): HarnessCapabilities;
   resolveInstallPaths(context: AdapterContext): HarnessPaths;
   listInstalled(context: AdapterContext): Promise<InstalledResources>;
+  listUnmanaged(context: AdapterContext): Promise<UnmanagedResource[]>;
   renderAgent(input: RenderAgentInput): Promise<RenderedFile[]>;
-  renderSkill?(input: RenderSkillInput): Promise<RenderedFile[]>;
-  renderPlugin?(input: RenderPluginInput): Promise<RenderedFile[]>;
+  importAgents(context: AdapterContext): Promise<ImportedAgent[]>;
   sync(context: SyncContext): Promise<SyncResult>;
   buildRunCommand(input: RunCommandInput): Promise<CommandSpec>;
 }
@@ -230,8 +207,6 @@ type HarnessCapabilities = {
   headlessRun: boolean;
   customAgents: boolean;
   directAgentLaunch: boolean;
-  skills: "native" | "emulated" | "unsupported";
-  plugins: "native" | "partial" | "unsupported";
 };
 ```
 
@@ -261,16 +236,32 @@ Behavior:
 - compute desired harness-native artifacts
 - diff against existing generated files
 - write changes
-- optionally delete stale generated files that are marked as managed by agentctl
+- warn about unmanaged agents found in harness directories that agentctl does not know about
+- optionally delete stale generated files that are tracked in the sync manifest
 
-Important rule:
+### Ownership Rules
 
-only files marked as agentctl-managed should be overwritten or deleted. This avoids destroying user-owned native config.
+After import or creation, agentctl **owns** agents it manages. On sync:
 
-Suggested mechanism:
+- agents with the same name as an agentctl-managed agent are overwritten in the harness directory
+- unmanaged agents (present in the harness directory but not in `.agentctl/`) trigger a warning, not deletion
+- name collisions between an unmanaged harness agent and a new agentctl agent require `--force` or interactive confirmation
 
-- place a management marker in generated files when the harness format allows it
-- keep a small manifest under `.agentctl/state/` that tracks generated outputs
+### Sync State
+
+Sync state is stored in `~/.agentctl/state/` and tracks:
+
+- which files were written to which harness directories
+- content hashes of managed files (to detect external edits)
+- project identity (keyed to avoid collisions across repos)
+
+This directory is machine-local and should never be committed to version control.
+
+### What Sync Does Not Touch
+
+- harness-managed runtime state (memory, session history, task logs)
+- `CLAUDE.md` and equivalent harness-specific system prompt files
+- harness settings files (e.g., `.claude/settings.json`)
 
 ## Run Model
 
@@ -315,9 +306,8 @@ Examples:
 
 ```bash
 agentctl list agents
-agentctl list skills --global
+agentctl list agents --global
 agentctl harness list claude agents
-agentctl harness list codex skills
 ```
 
 ## Local vs Global Semantics
@@ -389,25 +379,23 @@ src/
   models/
   resources/
     agents/
-    skills/
-    plugins/
   adapters/
     base.ts
     claude.ts
-    codex.ts
-    opencode.ts
   sync/
   run/
   list/
   util/
 ```
 
+Additional adapters (`codex.ts`, `opencode.ts`) are added as later milestones validate the adapter interface.
+
 ## Command Surface
 
 Suggested v1 command structure:
 
 ```bash
-agentctl init
+agentctl init [--from claude]
 agentctl sync [harness]
 agentctl run --harness <name> [options]
 agentctl list <resource-kind>
@@ -417,11 +405,13 @@ agentctl doctor
 
 ### `init`
 
-Creates `.agentctl/` in the current repo with starter config.
+Creates `.agentctl/` in the current repo with starter config, including default `models.json`.
+
+With `--from claude`: imports existing agent definitions from `.claude/agents/` into `.agentctl/agents/`. Only Claude is supported as an import source in v1. The command should clearly report what was imported and what was skipped (e.g., settings, memory, CLAUDE.md are not imported).
 
 ### `sync`
 
-Generates harness-native artifacts from canonical config.
+Generates harness-native artifacts from canonical config. Reports unmanaged agents found in harness directories.
 
 ### `run`
 
@@ -443,7 +433,7 @@ Checks:
 - missing adapters
 - missing harness binaries
 - unsupported requested capabilities
-- sync drift
+- sync drift (managed files that have been externally modified)
 
 ## Extensibility Rules
 
@@ -484,31 +474,33 @@ These states should be explicit in CLI output.
 
 ## Open Questions
 
-1. Should `.agentctl/` support importing harness-native definitions as a bootstrap path, or only export/sync?
-2. Are skills portable enough to be first-class in v1, or should v1 focus on agents plus model aliases?
-3. Do plugins belong in the portable core yet, or should they remain adapter-specific until at least two harnesses have comparable plugin semantics?
-4. Should headless execution return normalized JSON output where possible, or is pass-through stdout enough for v1?
-5. Should degraded behavior be opt-in globally, per command, or per adapter?
+1. Should headless execution return normalized JSON output where possible, or is pass-through stdout enough for v1?
+2. Should degraded behavior be opt-in globally, per command, or per adapter?
 
-## Recommended v1 Scope
+## Decisions Made
+
+These questions were considered and resolved during design:
+
+- **Import from harness**: Yes. `agentctl init --from claude` is supported in v1 as a one-time bootstrap. Only Claude is supported as an import source initially.
+- **Skills in v1**: No. v1 focuses on agents and model aliases. Skills are deferred (see `FUTURE.md`).
+- **Plugins in v1**: No. Plugins are deferred (see `FUTURE.md`).
+- **Memory management**: No. agentctl manages agent definitions only. Runtime state (memory, sessions, tasks) remains harness-managed.
+- **Model mapping ownership**: User-owned. agentctl scaffolds defaults but the user maintains `models.json`.
+
+## v1 Scope
 
 Keep v1 narrow:
 
-1. portable agents
-2. portable model classes
-3. `sync`
-4. `run`
-5. `list`
-6. adapters for Claude Code, Codex, and OpenCode
+1. portable agent definitions
+2. portable model class mappings (user-owned)
+3. `init` with `--from claude` import
+4. `sync` with ownership tracking and unmanaged-agent warnings
+5. `run`
+6. `list`
+7. Claude Code adapter only
+8. `doctor`
 
-Delay to v2:
-
-- strong plugin support
-- import from native harness configs
-- remote registries
-- background daemons
-
-## Recommended First Milestones
+## Milestones
 
 ### Milestone 1
 
@@ -516,24 +508,28 @@ Delay to v2:
 - implement config loading and layered merge
 - implement portable agent manifest
 - implement model class mapping
+- implement `init` with starter scaffolding
 
 ### Milestone 2
 
-- implement Claude adapter
-- implement sync for agents
-- implement `run`
+- implement Claude adapter (detect, renderAgent, importAgents, listUnmanaged)
+- implement `init --from claude`
+- implement sync for agents with ownership tracking
 - implement `list`
 
 ### Milestone 3
 
-- add Codex and OpenCode adapters
-- add capability reporting and degraded-mode handling
-- add `doctor`
+- implement `run` (interactive and headless)
+- implement `doctor`
+- implement capability reporting and degraded-mode handling
 
 ### Milestone 4
 
-- add skills
-- decide whether plugins stay experimental or become first-class
+- add Codex adapter to validate the adapter interface against a second harness
+- resolve any interface changes needed based on real-world usage
+- add OpenCode adapter if the interface holds
+
+See `FUTURE.md` for later-stage plans (skills, plugins, memory, registries).
 
 ## Recommendation
 
