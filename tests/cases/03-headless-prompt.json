@@ -7,17 +7,16 @@
     "claude": {
       "dryRun": "claude -p respond with exactly: TEST_OK",
       "steps": [
-        { "wait": "TEST_OK", "timeoutMs": 30000 }
+        { "wait": "/^TEST_OK$/m", "timeoutMs": 30000 }
       ],
       "exitCode": 0
     },
     "opencode": {
       "dryRun": "opencode run respond with exactly: TEST_OK",
       "steps": [
-        { "wait": "TEST_OK", "timeoutMs": 30000 }
+        { "wait": "/^TEST_OK$/m", "timeoutMs": 30000 }
       ],
-      "exitCode": 0,
-      "xfail": "opencode headless not validated yet"
+      "exitCode": 0
     }
   }
 }

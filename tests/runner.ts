@@ -1,5 +1,6 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
 import {
   type TestEnv,
   type TestCaseExpected,
@@ -158,6 +159,14 @@ for (const testCase of cases) {
               t.todo(expected.xfail);
               return;
             }
+
+            // Kill previous session (dry-run) and reset log so stale
+            // output doesn't satisfy waitForLog prematurely.
+            if (session) {
+              killSession(session);
+              session = undefined;
+            }
+            await fs.writeFile(env.logPath, "");
 
             const cmd = buildCommand(testCase.command, harnessId, env);
 
