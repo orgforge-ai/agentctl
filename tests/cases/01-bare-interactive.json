@@ -6,13 +6,16 @@
   "skipDryRun": true,
   "expected": {
     "claude": {
-      "live": ">",
+      "steps": [
+        { "wait": "Claude Code", "timeoutMs": 15000 }
+      ],
       "exitCode": 0
     },
     "opencode": {
-      "live": null,
-      "exitCode": 0,
-      "xfail": "opencode cannot spawn interactive session via agentctl"
+      "steps": [
+        { "wait": "OpenCode", "timeoutMs": 15000 }
+      ],
+      "exitCode": 0
     }
   }
 }

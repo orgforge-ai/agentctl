@@ -1,5 +1,6 @@
 import { execSync } from "node:child_process";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
 import * as path from "node:path";
 import stripAnsi from "strip-ansi";
 
@@ -12,12 +13,14 @@ const OUTPUT_DIR = path.join(PROJECT_ROOT, ".test-output");
 export interface TestEnv {
   /** Stable output dir: .test-output/{testName}/{harness}/ */
   outputDir: string;
-  /** Isolated project dir (fixture copy) inside outputDir */
+  /** Isolated project dir in /tmp/ (outside repo tree) */
   projectDir: string;
-  /** Isolated HOME dir inside outputDir */
+  /** Isolated HOME dir in /tmp/ (outside repo tree) */
   homeDir: string;
-  /** Captured terminal output */
+  /** Captured terminal output (in outputDir) */
   logPath: string;
+  /** Temp dir in /tmp/ to clean up */
+  tmpDir: string;
 }
 
 export interface WaitOptions {
@@ -67,12 +70,17 @@ export async function createTestProject(
 ): Promise<TestEnv> {
   const outputDir = path.join(OUTPUT_DIR, testName, harnessId);
 
-  // Wipe previous run, then recreate
+  // Wipe previous output, then recreate
   await fs.rm(outputDir, { recursive: true, force: true });
   await fs.mkdir(outputDir, { recursive: true });
 
-  const projectDir = path.join(outputDir, "project");
-  const homeDir = path.join(outputDir, "home");
+  // Project and home dirs live in /tmp/ so they're outside the repo tree.
+  // This prevents harnesses from walking up and finding the real repo's config.
+  const tmpDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), `agentctl-test-${testName}-${harnessId}-`)
+  );
+  const projectDir = path.join(tmpDir, "project");
+  const homeDir = path.join(tmpDir, "home");
 
   // Copy fixture to project dir
   await fs.cp(
@@ -96,13 +104,66 @@ export async function createTestProject(
     // No files dir — that's fine
   }
 
-  // Create empty home dir
+  // Seed home dir from harness fixture (onboarding config, settings, etc.)
   await fs.mkdir(homeDir, { recursive: true });
+  const homeFixtureDir = path.join(import.meta.dirname, "fixtures", "home", harnessId);
+  try {
+    await fs.access(homeFixtureDir);
+    await fs.cp(homeFixtureDir, homeDir, { recursive: true });
+  } catch {
+    // No home fixture for this harness — start empty
+  }
 
-  // Log file lives at top of output dir
+  // Symlink credentials from real home
+  const realClaudeDir = path.join(os.homedir(), ".claude");
+  const credsFiles = [".credentials.json", ".credentials.trigger"];
+  try {
+    await fs.mkdir(path.join(homeDir, ".claude"), { recursive: true });
+    for (const file of credsFiles) {
+      const src = path.join(realClaudeDir, file);
+      const dest = path.join(homeDir, ".claude", file);
+      try {
+        await fs.access(src);
+        // Don't overwrite if fixture already placed one
+        await fs.access(dest);
+      } catch {
+        try {
+          await fs.access(src);
+          await fs.symlink(src, dest);
+        } catch {
+          // Source doesn't exist — skip
+        }
+      }
+    }
+  } catch {
+    // No credentials — tests that need auth will fail naturally
+  }
+
+  // Patch .claude.json with project trust entry (path is dynamic)
+  const claudeJsonPath = path.join(homeDir, ".claude.json");
+  try {
+    const raw = await fs.readFile(claudeJsonPath, "utf-8");
+    const claudeJson = JSON.parse(raw);
+    claudeJson.projects = claudeJson.projects ?? {};
+    claudeJson.projects[projectDir] = {
+      allowedTools: [],
+      hasTrustDialogAccepted: true,
+      hasClaudeMdExternalIncludesApproved: true,
+      hasClaudeMdExternalIncludesWarningShown: true,
+    };
+    await fs.writeFile(claudeJsonPath, JSON.stringify(claudeJson, null, 2) + "\n");
+  } catch {
+    // No .claude.json — skip patching
+  }
+
+  // Log file lives in the stable output dir
   const logPath = path.join(outputDir, "output.log");
 
-  return { outputDir, projectDir, homeDir, logPath };
+  return { outputDir, projectDir, homeDir, logPath, tmpDir };
+}
+
+export async function cleanupTestEnv(env: TestEnv): Promise<void> {
+  await fs.rm(env.tmpDir, { recursive: true, force: true });
 }
 
 // --- tmux session management ---
@@ -121,11 +182,21 @@ export async function startSession(
   // Create detached session with fixed dimensions
   execSync(`tmux new-session -d -s '${session}' -x 120 -y 40`);
 
-  // Set up environment and signal completion with a sentinel file.
-  // All setup runs in one send-keys so there's only one prompt cycle.
+  // Unset API keys that could leak from the host environment,
+  // then set up isolated HOME/CWD and signal completion with a sentinel file.
+  const unsetKeys = [
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GOOGLE_API_KEY",
+    "AZURE_OPENAI_API_KEY",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+  ].map((k) => `unset ${k}`).join(" && ");
+
   execSync(
     `tmux send-keys -t '${session}' ` +
-      `'export HOME=${shellEscape(env.homeDir)} && ` +
+      `'${unsetKeys} && ` +
+      `export HOME=${shellEscape(env.homeDir)} && ` +
       `cd ${shellEscape(env.projectDir)} && ` +
       `touch ${shellEscape(sentinelFile)}' Enter`
   );
@@ -188,26 +259,13 @@ export async function readLog(logPath: string): Promise<string> {
   }
 }
 
-export async function writeCleanLog(
-  session: string,
-  logPath: string
-): Promise<void> {
+export async function writeCleanLog(logPath: string): Promise<void> {
   const cleanPath = logPath.replace(/\.log$/, ".clean.log");
   try {
-    // capture-pane renders the composited screen (cursor positioning resolved)
-    const content = execSync(
-      `tmux capture-pane -t '${session}' -p -S - -E -`,
-      { encoding: "utf-8" }
-    );
-    await fs.writeFile(cleanPath, content);
+    const raw = await fs.readFile(logPath, "utf-8");
+    await fs.writeFile(cleanPath, cleanLog(raw));
   } catch {
-    // Session already dead — fall back to stripping the raw log
-    try {
-      const raw = await fs.readFile(logPath, "utf-8");
-      await fs.writeFile(cleanPath, cleanLog(raw));
-    } catch {
-      // No log file either
-    }
+    // No log file
   }
 }
 
@@ -220,16 +278,14 @@ export async function waitForLog(
   const poll = options?.pollMs ?? 200;
   const start = Date.now();
 
+  const testMatch = (text: string): boolean =>
+    typeof pattern === "string" ? text.includes(pattern) : pattern.test(text);
+
   while (Date.now() - start < timeout) {
     try {
       const content = cleanLog(await fs.readFile(logPath, "utf-8"));
-      const match =
-        typeof pattern === "string"
-          ? content.includes(pattern)
-          : pattern.test(content);
-      if (match) return content;
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      if (testMatch(content)) return content;
+    } catch {
       // File doesn't exist yet — keep polling
     }
     await sleep(poll);
@@ -299,6 +355,50 @@ export async function assertNoZombies(session: string): Promise<void> {
   }
 }
 
+/**
+ * Parse a pattern string from case JSON into a string or RegExp.
+ * Strings starting and ending with `/` are treated as regex (e.g., "/Claude Code v\\d+/").
+ * Flags can be appended after the closing slash (e.g., "/pattern/i").
+ */
+export function parsePattern(pattern: string): string | RegExp {
+  const match = pattern.match(/^\/(.+)\/([gimsuy]*)$/);
+  if (match) {
+    return new RegExp(match[1], match[2]);
+  }
+  return pattern;
+}
+
+// --- Step execution ---
+
+const DEFAULT_WAIT_TIMEOUT = 15_000;
+
+export async function runSteps(
+  steps: Step[],
+  session: string,
+  logPath: string
+): Promise<void> {
+  for (const step of steps) {
+    if ("wait" in step) {
+      await waitForLog(logPath, parsePattern(step.wait), {
+        timeoutMs: step.timeoutMs ?? DEFAULT_WAIT_TIMEOUT,
+      });
+    } else if ("send" in step) {
+      // Split on literal \n — text parts sent via -l (literal), newlines sent as Enter
+      const parts = step.send.split("\\n");
+      for (let i = 0; i < parts.length; i++) {
+        if (parts[i]) {
+          execSync(
+            `tmux send-keys -t '${session}' -l '${shellEscape(parts[i])}'`
+          );
+        }
+        if (i < parts.length - 1) {
+          execSync(`tmux send-keys -t '${session}' Enter`);
+        }
+      }
+    }
+  }
+}
+
 // --- Command building ---
 
 export function buildCommand(
@@ -336,10 +436,21 @@ export function cleanupOrphanedSessions(): void {
 
 // --- Case loading ---
 
+export interface StepWait {
+  wait: string;
+  timeoutMs?: number;
+}
+
+export interface StepSend {
+  send: string;
+}
+
+export type Step = StepWait | StepSend;
+
 export interface TestCaseExpected {
   dryRun?: string | null;
   dryRunNotContains?: string;
-  live?: string | null;
+  steps?: Step[];
   exitCode?: number;
   error?: string;
   signal?: string;
