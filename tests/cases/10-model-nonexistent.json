@@ -1,0 +1,16 @@
+{
+  "name": "model-nonexistent",
+  "description": "Unknown model class fails with a message naming the class",
+  "command": "agentctl run -h {harness} --model nonexistent",
+  "skipDryRun": true,
+  "expected": {
+    "claude": {
+      "error": "No Claude mapping for model class \"nonexistent\"",
+      "exitCode": 1
+    },
+    "opencode": {
+      "error": "No OpenCode mapping for model class \"nonexistent\"",
+      "exitCode": 1
+    }
+  }
+}

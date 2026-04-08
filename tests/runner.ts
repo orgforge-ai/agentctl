@@ -24,10 +24,9 @@ import {
   cleanupOrphanedSessions,
 } from "./helpers.js";
 
-// Parse --exclude from argv: --exclude api,slow
-const excludeArg = process.argv.find((a) => a.startsWith("--exclude"));
+// Parse exclude tags from EXCLUDE_TAGS env var (argv is consumed by tsx --test)
 const excludeTags = new Set(
-  excludeArg ? excludeArg.split("=").pop()!.split(",") : []
+  process.env.EXCLUDE_TAGS ? process.env.EXCLUDE_TAGS.split(",") : []
 );
 
 function assertContains(
@@ -85,14 +84,14 @@ for (const testCase of cases) {
         }));
 
     for (const { id: harnessId, expected } of harnesses) {
-      describe(`[${harnessId}]`, () => {
+      const harnessNotInstalled =
+        harnessId !== "_global" && !isInstalled(harnessId);
+
+      describe(`[${harnessId}]`, { skip: harnessNotInstalled ? `${harnessId} not installed` : undefined }, () => {
         let env: TestEnv;
         let session: string | undefined;
 
         before(async () => {
-          if (harnessId !== "_global" && !isInstalled(harnessId)) {
-            return;
-          }
           env = await createTestProject(
             testCase.name,
             harnessId,
@@ -108,12 +107,7 @@ for (const testCase of cases) {
 
         // --- Dry-run test ---
         if (!testCase.skipDryRun && expected.dryRun) {
-          it("dry-run output matches", async (t) => {
-            if (harnessId !== "_global" && !isInstalled(harnessId)) {
-              t.skip(`${harnessId} not installed`);
-              return;
-            }
-
+          it("dry-run output matches", async () => {
             const cmd =
               buildCommand(testCase.command, harnessId, env) + " --dry-run";
             session = await startSession(
@@ -121,14 +115,25 @@ for (const testCase of cases) {
               env
             );
 
-            await waitForSessionExit(session, { timeoutMs: 5_000 });
+            await waitForLog(env.logPath, /AGENTCTL_EXIT=\d+/, {
+              timeoutMs: 5_000,
+            });
             const log = cleanLog(await readLog(env.logPath));
 
-            assertContains(log, parsePattern(expected.dryRun!), "dry-run");
+            // Extract just the dry-run output (between command echo and exit marker)
+            const exitMatch = log.match(/AGENTCTL_EXIT=\d+/);
+            const exitIdx = exitMatch ? log.indexOf(exitMatch[0]) : log.length;
+            // Find last newline before the dry-run output starts
+            // (skip the echoed command line which contains the original flags)
+            const cmdEcho = log.indexOf("--dry-run");
+            const outputStart = cmdEcho !== -1 ? log.indexOf("\n", cmdEcho) + 1 : 0;
+            const dryRunOutput = log.slice(outputStart, exitIdx);
+
+            assertContains(dryRunOutput, parsePattern(expected.dryRun!), "dry-run");
 
             if (expected.dryRunNotContains) {
               assertNotContains(
-                log,
+                dryRunOutput,
                 parsePattern(expected.dryRunNotContains),
                 "dry-run"
               );
@@ -141,10 +146,6 @@ for (const testCase of cases) {
         // --- Live test ---
         if (!testCase.skipLive) {
           it("live execution matches", async (t) => {
-            if (harnessId !== "_global" && !isInstalled(harnessId)) {
-              t.skip(`${harnessId} not installed`);
-              return;
-            }
             if (expected.xfail) {
               t.todo(expected.xfail);
               return;
@@ -172,7 +173,10 @@ for (const testCase of cases) {
               );
 
               if (expected.steps) {
-                await runSteps(expected.steps, session!, env.logPath);
+                const result = await runSteps(expected.steps, session!, env.logPath);
+                if (result.needsValidation) {
+                  assert.fail("steps contain wait: null — needs validation");
+                }
               }
 
               const panePid = getPanePid(session!);
@@ -198,7 +202,10 @@ for (const testCase of cases) {
               );
 
               if (expected.steps) {
-                await runSteps(expected.steps, session!, env.logPath);
+                const result = await runSteps(expected.steps, session!, env.logPath);
+                if (result.needsValidation) {
+                  assert.fail("steps contain wait: null — needs validation");
+                }
               }
 
               await waitForLog(env.logPath, /AGENTCTL_EXIT=\d+/, {

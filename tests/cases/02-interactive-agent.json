@@ -1,7 +1,7 @@
 {
-  "name": "bare-interactive",
-  "description": "Bare interactive launch starts a session with no flags",
-  "command": "agentctl run -h {harness}",
+  "name": "interactive-agent",
+  "description": "Interactive launch with --agent loads the specified agent",
+  "command": "agentctl run -h {harness} --agent reviewer",
   "tags": ["interactive"],
   "skipDryRun": true,
   "expected": {

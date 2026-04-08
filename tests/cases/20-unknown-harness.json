@@ -1,0 +1,12 @@
+{
+  "name": "unknown-harness",
+  "description": "Unknown harness ID fails with available harness list",
+  "command": "agentctl run -h nonexistent",
+  "skipDryRun": true,
+  "expected": {
+    "_global": {
+      "error": "Unknown harness: nonexistent",
+      "exitCode": 1
+    }
+  }
+}

@@ -11,8 +11,8 @@
     "dev": "tsc --watch",
     "start": "node dist/cli/index.js",
     "test": "tsx --test tests/runner.ts",
-    "test:fast": "tsx --test tests/runner.ts --exclude=api,slow",
-    "test:dry-run-only": "tsx --test tests/runner.ts --exclude=api,slow,interactive,signal",
+    "test:fast": "EXCLUDE_TAGS=api,slow tsx --test tests/runner.ts",
+    "test:dry-run-only": "EXCLUDE_TAGS=api,slow,interactive,signal tsx --test tests/runner.ts",
     "test:manual": "tsx tests/manual-session.ts"
   },
   "engines": {

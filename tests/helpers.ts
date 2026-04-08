@@ -2,10 +2,13 @@ import { execSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import stripAnsi from "strip-ansi";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 // Project root (one level up from tests/)
-const PROJECT_ROOT = path.resolve(import.meta.dirname, "..");
+const PROJECT_ROOT = path.resolve(__dirname, "..");
 const OUTPUT_DIR = path.join(PROJECT_ROOT, ".test-output");
 
 // --- Types ---
@@ -94,13 +97,13 @@ export async function createTestProject(
 
   // Copy fixture to project dir
   await fs.cp(
-    path.join(import.meta.dirname, "fixtures", "projects", fixture),
+    path.join(__dirname, "fixtures", "projects", fixture),
     projectDir,
     { recursive: true }
   );
 
   // Copy shared files into project dir (e.g., prompt.txt)
-  const filesDir = path.join(import.meta.dirname, "fixtures", "files");
+  const filesDir = path.join(__dirname, "fixtures", "files");
   try {
     const files = await fs.readdir(filesDir);
     for (const file of files) {
@@ -116,7 +119,7 @@ export async function createTestProject(
 
   // Seed home dir from harness fixture (onboarding config, settings, etc.)
   await fs.mkdir(homeDir, { recursive: true });
-  const homeFixtureDir = path.join(import.meta.dirname, "fixtures", "home", harnessId);
+  const homeFixtureDir = path.join(__dirname, "fixtures", "home", harnessId);
   try {
     await fs.access(homeFixtureDir);
     await fs.cp(homeFixtureDir, homeDir, { recursive: true });
@@ -173,7 +176,15 @@ export async function createTestProject(
 }
 
 export async function cleanupTestEnv(env: TestEnv): Promise<void> {
-  await fs.rm(env.tmpDir, { recursive: true, force: true });
+  // Retry removal — harness processes may still be writing to the dir
+  for (let i = 0; i < 3; i++) {
+    try {
+      await fs.rm(env.tmpDir, { recursive: true, force: true });
+      return;
+    } catch {
+      await sleep(500);
+    }
+  }
 }
 
 // --- tmux session management ---
@@ -403,19 +414,37 @@ export function parsePattern(pattern: string): string | RegExp {
 
 const DEFAULT_WAIT_TIMEOUT = 15_000;
 
+function capturePane(session: string): string {
+  try {
+    return execSync(
+      `tmux capture-pane -t '${session}' -p 2>/dev/null`,
+      { encoding: "utf-8" }
+    );
+  } catch {
+    return "";
+  }
+}
+
 export async function runSteps(
   steps: Step[],
   session: string,
   logPath: string
-): Promise<void> {
+): Promise<{ needsValidation: boolean }> {
+  const outputDir = path.dirname(logPath);
+  let needsValidation = false;
+  let stepIndex = 0;
   for (const step of steps) {
     if ("wait" in step) {
       if (step.wait === null) {
-        throw new Error("Step has wait: null — test not expected to pass for this harness");
+        // Pause for the specified timeout — lets the session render output
+        // before cleanup captures the pane for manual inspection.
+        await sleep(step.timeoutMs ?? DEFAULT_WAIT_TIMEOUT);
+        needsValidation = true;
+      } else {
+        await waitForLog(logPath, parsePattern(step.wait), {
+          timeoutMs: step.timeoutMs ?? DEFAULT_WAIT_TIMEOUT,
+        });
       }
-      await waitForLog(logPath, parsePattern(step.wait), {
-        timeoutMs: step.timeoutMs ?? DEFAULT_WAIT_TIMEOUT,
-      });
     } else if ("send" in step) {
       // Split on literal \n — text parts sent via -l (literal), newlines sent as Enter
       const parts = step.send.split("\\n");
@@ -430,7 +459,21 @@ export async function runSteps(
         }
       }
     }
+    // Brief delay after send steps so the TUI renders before we capture
+    if ("send" in step) {
+      await sleep(500);
+    }
+    // Snapshot the pane after every step
+    const snapshot = capturePane(session);
+    if (snapshot.trim()) {
+      await fs.writeFile(
+        path.join(outputDir, `step-${stepIndex}.log`),
+        snapshot
+      );
+    }
+    stepIndex++;
   }
+  return { needsValidation };
 }
 
 // --- Command building ---
@@ -503,9 +546,9 @@ export interface TestCase {
 }
 
 export async function loadCases(): Promise<TestCase[]> {
-  const casesDir = path.join(import.meta.dirname, "cases");
+  const casesDir = path.join(__dirname, "cases");
   const entries = await fs.readdir(casesDir);
-  const jsonFiles = entries.filter((f) => f.endsWith(".json")).sort();
+  const jsonFiles = entries.filter((f: string) => f.endsWith(".json")).sort();
 
   const cases: TestCase[] = [];
   for (const file of jsonFiles) {

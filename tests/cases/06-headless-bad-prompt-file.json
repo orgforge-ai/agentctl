@@ -1,0 +1,16 @@
+{
+  "name": "headless-bad-prompt-file",
+  "description": "Headless with nonexistent prompt file fails cleanly",
+  "command": "agentctl run -h {harness} --headless --prompt-file /nonexistent/path.txt",
+  "skipDryRun": true,
+  "expected": {
+    "claude": {
+      "error": "Cannot read prompt file",
+      "exitCode": 1
+    },
+    "opencode": {
+      "error": "Cannot read prompt file",
+      "exitCode": 1
+    }
+  }
+}

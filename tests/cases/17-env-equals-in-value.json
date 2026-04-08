@@ -1,0 +1,14 @@
+{
+  "name": "env-equals-in-value",
+  "description": "Only first = is the delimiter — value can contain =",
+  "command": "agentctl run -h {harness} --headless --prompt \"x\" --env FOO=bar=baz",
+  "skipLive": true,
+  "expected": {
+    "claude": {
+      "dryRun": "FOO=bar=baz claude"
+    },
+    "opencode": {
+      "dryRun": "FOO=bar=baz opencode"
+    }
+  }
+}

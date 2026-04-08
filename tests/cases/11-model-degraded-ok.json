@@ -1,11 +1,12 @@
 {
-  "name": "bare-interactive",
-  "description": "Bare interactive launch starts a session with no flags",
-  "command": "agentctl run -h {harness}",
+  "name": "model-degraded-ok",
+  "description": "Unknown model with --degraded-ok starts session without model flag",
+  "command": "agentctl run -h {harness} --model nonexistent --degraded-ok",
   "tags": ["interactive"],
-  "skipDryRun": true,
   "expected": {
     "claude": {
+      "dryRun": "claude",
+      "dryRunNotContains": "--model",
       "steps": [
         { "wait": "Claude Code", "timeoutMs": 15000 },
         { "send": "respond with only TEST_SUCCEEDED\\n" },
@@ -14,6 +15,8 @@
       "exitCode": 0
     },
     "opencode": {
+      "dryRun": "opencode",
+      "dryRunNotContains": "--model",
       "steps": [
         { "wait": "OpenCode", "timeoutMs": 15000 },
         { "send": "respond with only TEST_SUCCEEDED\\n" },
