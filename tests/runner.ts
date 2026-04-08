@@ -101,7 +101,7 @@ for (const testCase of cases) {
         });
 
         after(async () => {
-          if (env) await writeCleanLog(env.logPath);
+          if (session && env) await writeCleanLog(env.logPath, session);
           if (session) killSession(session);
           if (env) await cleanupTestEnv(env);
         });

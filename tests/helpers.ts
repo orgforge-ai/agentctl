@@ -28,17 +28,27 @@ export interface WaitOptions {
   pollMs?: number;
 }
 
-// Convert cursor-movement sequences to spaces, then strip remaining ANSI
+// Strip terminal escapes and convert cursor movement to spacing
 export function cleanLog(text: string): string {
   const processed = text
-    // Cursor forward [<n>C → <n> spaces (before stripping, so spacing is preserved)
-    .replace(/\x1b\[(\d+)C/g, (_match, n) => " ".repeat(parseInt(n)))
-    // Private-mode CSI sequences: ESC [ ? ... or ESC [ > ... (kitty protocol, DECLL, etc.)
-    .replace(/\x1b\[[>?][0-9;]*[a-zA-Z]/g, "")
-    // DCS and other ESC sequences strip-ansi may miss
+    // tmux DCS passthrough: ESC P tmux; ... ESC \ (may contain nested ESC sequences)
+    .replace(/\x1bPtmux;[^\x1b]*(?:\x1b[^\x1b\\])*\x1b\\/g, "")
+    // Remaining DCS/APC/PM sequences
     .replace(/\x1b[P^_][^\x1b]*\x1b\\/g, "")
-    // Stray CSI fragments (e.g., partial sequences)
-    .replace(/\x1b\[[\d;]*$/gm, "");
+    // Cursor forward [<n>C → <n> spaces
+    .replace(/\x1b\[(\d+)C/g, (_match, n) => " ".repeat(parseInt(n)))
+    // Cursor position [row;colH → newline (rough approximation)
+    .replace(/\x1b\[\d+;\d+H/g, "\n")
+    // Cursor to column 1 [row;1H or [H
+    .replace(/\x1b\[\d*H/g, "\n")
+    // Private-mode CSI sequences: ESC [ ? ... or ESC [ > ...
+    .replace(/\x1b\[[>?][0-9;]*[a-zA-Z]/g, "")
+    // OSC sequences (title set, etc.)
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    // Stray CSI fragments
+    .replace(/\x1b\[[\d;]*$/gm, "")
+    // Collapse multiple blank lines
+    .replace(/\n{3,}/g, "\n\n");
   return stripAnsi(processed);
 }
 
@@ -259,8 +269,29 @@ export async function readLog(logPath: string): Promise<string> {
   }
 }
 
-export async function writeCleanLog(logPath: string): Promise<void> {
+export async function writeCleanLog(
+  logPath: string,
+  session?: string
+): Promise<void> {
   const cleanPath = logPath.replace(/\.log$/, ".clean.log");
+
+  // Try capture-pane first (proper screen rendering)
+  if (session) {
+    try {
+      const content = execSync(
+        `tmux capture-pane -t '${session}' -p 2>/dev/null`,
+        { encoding: "utf-8" }
+      );
+      if (content.trim()) {
+        await fs.writeFile(cleanPath, content);
+        return;
+      }
+    } catch {
+      // Session gone or capture failed
+    }
+  }
+
+  // Fall back to cleaning the raw pipe-pane log
   try {
     const raw = await fs.readFile(logPath, "utf-8");
     await fs.writeFile(cleanPath, cleanLog(raw));
@@ -379,6 +410,9 @@ export async function runSteps(
 ): Promise<void> {
   for (const step of steps) {
     if ("wait" in step) {
+      if (step.wait === null) {
+        throw new Error("Step has wait: null — test not expected to pass for this harness");
+      }
       await waitForLog(logPath, parsePattern(step.wait), {
         timeoutMs: step.timeoutMs ?? DEFAULT_WAIT_TIMEOUT,
       });
@@ -437,7 +471,7 @@ export function cleanupOrphanedSessions(): void {
 // --- Case loading ---
 
 export interface StepWait {
-  wait: string;
+  wait: string | null;
   timeoutMs?: number;
 }
 
