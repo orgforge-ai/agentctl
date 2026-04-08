@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "modelClasses": {
+    "small": {
+      "claude": "custom-haiku",
+      "opencode": "custom/model-override"
+    },
+    "medium": {
+      "claude": "custom-sonnet",
+      "opencode": "custom/model-medium"
+    },
+    "large": {
+      "claude": "custom-opus",
+      "opencode": "custom/model-large"
+    }
+  }
+}

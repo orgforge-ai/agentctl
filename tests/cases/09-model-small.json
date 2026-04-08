@@ -1,0 +1,14 @@
+{
+  "name": "model-small",
+  "description": "Model class 'small' maps correctly (not hardcoded to one class)",
+  "command": "agentctl run -h {harness} --headless --prompt \"x\" --model small",
+  "skipLive": true,
+  "expected": {
+    "claude": {
+      "dryRun": "--model haiku"
+    },
+    "opencode": {
+      "dryRun": "-m anthropic/claude-haiku-4-5"
+    }
+  }
+}

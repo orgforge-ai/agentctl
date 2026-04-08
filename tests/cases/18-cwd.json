@@ -1,0 +1,15 @@
+{
+  "name": "cwd",
+  "description": "Claude passes --cwd as flag; opencode does not (uses spawn cwd)",
+  "command": "agentctl run -h {harness} --headless --prompt \"x\" --cwd /tmp",
+  "skipLive": true,
+  "expected": {
+    "claude": {
+      "dryRun": "--cwd /tmp"
+    },
+    "opencode": {
+      "dryRun": "opencode run x",
+      "dryRunNotContains": "--cwd"
+    }
+  }
+}

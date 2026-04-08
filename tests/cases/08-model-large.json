@@ -1,0 +1,14 @@
+{
+  "name": "model-large",
+  "description": "Model class 'large' maps to harness-specific model name",
+  "command": "agentctl run -h {harness} --headless --prompt \"x\" --model large",
+  "skipLive": true,
+  "expected": {
+    "claude": {
+      "dryRun": "--model opus"
+    },
+    "opencode": {
+      "dryRun": "-m anthropic/claude-opus-4-6"
+    }
+  }
+}

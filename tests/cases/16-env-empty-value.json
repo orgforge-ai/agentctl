@@ -1,0 +1,14 @@
+{
+  "name": "env-empty-value",
+  "description": "FOO= is valid - empty string value",
+  "command": "agentctl run -h {harness} --headless --prompt \"x\" --env FOO=",
+  "skipLive": true,
+  "expected": {
+    "claude": {
+      "dryRun": "FOO= claude"
+    },
+    "opencode": {
+      "dryRun": "FOO= opencode"
+    }
+  }
+}

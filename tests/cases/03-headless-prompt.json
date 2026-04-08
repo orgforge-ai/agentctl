@@ -1,0 +1,19 @@
+{
+  "name": "headless-prompt",
+  "description": "Headless with inline prompt sends prompt and receives response",
+  "command": "agentctl run -h {harness} --headless --prompt \"respond with exactly: TEST_OK\"",
+  "tags": ["api", "slow"],
+  "expected": {
+    "claude": {
+      "dryRun": "claude -p respond with exactly: TEST_OK",
+      "live": "TEST_OK",
+      "exitCode": 0
+    },
+    "opencode": {
+      "dryRun": "opencode run respond with exactly: TEST_OK",
+      "live": "TEST_OK",
+      "exitCode": 0,
+      "xfail": "opencode headless not validated yet"
+    }
+  }
+}

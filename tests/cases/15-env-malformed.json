@@ -1,0 +1,16 @@
+{
+  "name": "env-malformed",
+  "description": "Env var without = fails with clear message",
+  "command": "agentctl run -h {harness} --env INVALID",
+  "skipDryRun": true,
+  "expected": {
+    "claude": {
+      "error": "Invalid --env format: INVALID (expected KEY=VALUE)",
+      "exitCode": 1
+    },
+    "opencode": {
+      "error": "Invalid --env format: INVALID (expected KEY=VALUE)",
+      "exitCode": 1
+    }
+  }
+}

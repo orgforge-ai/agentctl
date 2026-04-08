@@ -1,0 +1,21 @@
+{
+  "name": "signal-exit-code",
+  "description": "Exit code after SIGINT should be 130 (128+SIGINT) - currently 0 due to known bug",
+  "command": "agentctl run -h {harness}",
+  "tags": ["interactive", "signal"],
+  "skipDryRun": true,
+  "expected": {
+    "claude": {
+      "live": ">",
+      "signal": "C-c",
+      "exitCode": 130,
+      "xfail": "run.ts uses code ?? 0 which loses signal information"
+    },
+    "opencode": {
+      "live": null,
+      "signal": "C-c",
+      "exitCode": 130,
+      "xfail": "opencode interactive + signal exit code both broken"
+    }
+  }
+}

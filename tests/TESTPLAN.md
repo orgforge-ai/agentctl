@@ -1,504 +1,642 @@
 # agentctl run — Integration Test Plan
 
-## Approach
+## Goal
 
-All tests use **tmux** to spawn `agentctl run` in a real PTY session. A **stub binary** for each harness (`claude`, `opencode`) replaces the real binary on `PATH`. The stub logs its invocation (command, args, env, TTY status, cwd) to a file atomically and stays alive until signaled, allowing the test to inspect the running session before teardown.
+Validate that `agentctl run` correctly spawns real harness sessions. E2E tests — real binaries, real PTYs, real output.
 
-Each test gets an isolated temp directory with a valid `.agentctl/` project structure (config, agents). Tests read the stub's invocation log and tmux pane output to assert correctness.
+See [DESIGN.md](./DESIGN.md) for infrastructure details (tmux lifecycle, log polling, fixture isolation, runner implementation).
 
-### Why tmux
+## Test case format
 
-- Allocates a real PTY — validates that interactive sessions get a terminal
-- `tmux send-keys` lets us test interactive input and signal handling
-- `tmux capture-pane` lets us read output without pipe hacks
-- Available on all CI Linux runners
-
-### Why stub binaries (not mocks)
-
-- Exercises the full code path: CLI parsing, config loading, adapter resolution, command building, `spawn()`
-- Proves the right binary is called with the right args
-- No test framework coupling to internal APIs
-
----
-
-## Infrastructure
-
-### Test isolation
-
-Every test overrides `HOME` to an empty temp directory. This prevents `~/.agentctl/` (the developer's or CI runner's global config) from leaking into tests and affecting model mappings, config, or agent resolution.
-
-Every test fixture includes a `.agentctl/` directory so that `findProjectRoot()` resolves to the temp dir and does not walk up the tree into unrelated `.git` directories.
-
-### Stub binary: `tests/fixtures/bin/claude` (and `opencode`)
-
-The stub writes its log **atomically** — all output goes to a temp file, then is moved into place. This prevents `waitForStub` from reading a partially-written log.
-
-Args are logged **individually** (not flattened with `$*`) so tests can distinguish `"hello world"` (one arg) from `hello` `world` (two args).
-
-```bash
-#!/bin/bash
-LOG="${AGENTCTL_TEST_INVOCATION_LOG:?}"
-TMPLOG="${LOG}.tmp.$$"
-
+```json
 {
-  echo "CMD=$0"
-  echo "ARGC=$#"
-  for i in $(seq 1 $#); do
-    echo "ARG[$i]=${!i}"
-  done
-  echo "CWD=$(pwd)"
-  [ -t 0 ] && echo "TTY=yes" || echo "TTY=no"
-  env | sort
-  echo "STUB_READY"
-} > "$TMPLOG"
-mv "$TMPLOG" "$LOG"
-
-# Handle signals for signal-propagation tests
-trap 'echo "SIGNAL=INT" >> "$LOG"; exit 130' INT
-trap 'echo "SIGNAL=TERM" >> "$LOG"; exit 143' TERM
-
-sleep 300  # stay alive until killed
+  "name": "headless-prompt",
+  "description": "Headless mode with inline prompt executes and returns model output",
+  "command": "agentctl run -h {harness} --headless --prompt \"respond with exactly: TEST_OK\"",
+  "fixture": "basic",
+  "tags": ["api", "slow"],
+  "expected": {
+    "claude": {
+      "dryRun": "claude -p respond with exactly: TEST_OK",
+      "live": "TEST_OK",
+      "exitCode": 0
+    },
+    "opencode": {
+      "dryRun": "opencode run respond with exactly: TEST_OK",
+      "live": "TEST_OK",
+      "exitCode": 0,
+      "xfail": "opencode headless not validated yet"
+    }
+  }
+}
 ```
 
-**Variant: `tests/fixtures/bin/claude-exit`** — exits immediately with a configurable code for exit-code propagation tests:
+### Fields
 
-```bash
-#!/bin/bash
-LOG="${AGENTCTL_TEST_INVOCATION_LOG:?}"
-echo "STUB_READY" > "$LOG"
-exit "${AGENTCTL_TEST_EXIT_CODE:-0}"
-```
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | yes | Unique test identifier |
+| `description` | string | yes | Why this test exists |
+| `command` | string | yes | Command template. `{harness}` is replaced with harness ID. `{fixture}` is replaced with project dir path. `{prompt_file}` with absolute path to a test prompt file. |
+| `fixture` | string | no | Fixture project to use. Default: `basic` |
+| `tags` | string[] | no | `api` (hits API), `slow` (long timeout), `interactive` (starts live session), `signal` (sends signals) |
+| `skipDryRun` | boolean | no | Skip dry-run check (for interactive-only tests, error cases that fail before command construction) |
+| `skipLive` | boolean | no | Skip live execution (for cases where dry-run is sufficient) |
+| `expected.{harness}` | object | yes (per harness) | Expected outputs for this harness |
+| `.dryRun` | string/null | conditional | Expected substring in `--dry-run` output. `null` if dry-run should not be tested. |
+| `.live` | string/null | conditional | Expected substring/regex in live output. `null` if live should not be tested. |
+| `.exitCode` | number | no | Expected exit code. Default: 0 |
+| `.error` | string | no | Expected error message substring (for failure cases) |
+| `.xfail` | string | no | If set, test is expected to fail. Value is the reason. |
 
-### Fixture project: `tests/fixtures/projects/basic/`
-
-```
-.agentctl/
-  config.json          # { "version": 1 }
-  models.json          # default model mappings
-  agents/
-    reviewer/
-      agent.json       # { "name": "reviewer", "description": "...", "prompt_file": "prompt.md" }
-      prompt.md        # "You are a code reviewer."
-```
-
-### Fixture project: `tests/fixtures/projects/custom-models/`
-
-Same as `basic/` but with a `models.json` that overrides `small.claude` to `"custom-haiku"`. Used by test 3.6.
-
-### Test helpers
-
-- `createTestProject(fixture?)` — copies fixture into a temp dir, sets up isolated `HOME`, returns `{ projectDir, homeDir, logPath }`
-- `startSession(cmd, opts?)` — creates tmux session with `HOME` override, sends cmd, returns session handle
-- `waitForStub(logPath, timeoutMs?)` — polls until log file exists and contains `STUB_READY`. Handles ENOENT gracefully. Default timeout 10s, poll interval 100ms.
-- `readInvocationLog(logPath)` — parses log into `{ cmd, argc, args[], cwd, tty, env{} }`
-- `waitForSessionExit(session, timeoutMs?)` — waits for tmux pane to close (for dry-run and error tests). Captures final pane content before exit.
-- `capturePaneContent(session)` — returns tmux pane text
-- `killSession(session)` — sends SIGTERM, waits, kills tmux session
-- `assertNoInvocation(logPath)` — asserts log file was never created (stub never ran)
-
----
-
-## Test Matrix
-
-### 1. Interactive session (no --headless)
-
-#### 1.1 `run -h claude` — bare interactive launch
+## Runner logic
 
 ```
-agentctl run -h claude
+for each case file in tests/cases/*.json:
+  load case
+  for each harness in case.expected:
+    skip if harness binary not installed
+    mark xfail if expected.xfail is set
+
+    setup:
+      create temp project from case.fixture
+      override HOME to isolate global config
+
+    if !case.skipDryRun and expected.dryRun:
+      start tmux session
+      pipe-pane to log file
+      send: {command with {harness} replaced} --dry-run
+      wait for session to exit
+      assert: log contains expected.dryRun
+      assert: exit code matches (default 0)
+
+    if !case.skipLive:
+      start tmux session
+      pipe-pane to log file
+      send: {command with {harness} replaced}
+
+      if expected.error:
+        wait for log to contain expected.error
+        assert: exit code matches expected.exitCode
+      else if expected.live:
+        wait for log to contain expected.live
+        if "interactive" in tags:
+          kill session
+        else:
+          wait for session to exit
+          assert: exit code matches expected.exitCode
+
+      if "signal" in tags:
+        (signal-specific logic — send C-c, check cleanup)
+
+    teardown:
+      kill tmux session if still alive
+      remove temp project
 ```
 
-**Asserts:**
-- Stub binary `claude` is invoked (not `opencode`)
-- No `-p` flag in args (not headless)
-- No `--agent` flag
-- No `--model` flag
-- `TTY=yes` in invocation log (stdio inherited, PTY attached)
-- `CWD` in log matches the tmux session's starting directory
+## Test cases
 
-**Why:** Validates the simplest happy path — interactive mode with no optional flags. Confirms spawn actually happens and the child process gets a terminal. CWD assertion guards against `findProjectRoot` escaping the sandbox.
+### 1. Interactive session
 
-#### 1.2 `run -h opencode` — bare interactive launch (alternate harness)
+#### 01-bare-interactive.json
 
-```
-agentctl run -h opencode
-```
-
-**Asserts:**
-- Stub binary `opencode` is invoked (not `claude`)
-- No `run` subcommand in args (that's headless-only for opencode)
-- `TTY=yes`
-- `CWD` is the project root (opencode defaults cwd to projectRoot)
-
-**Why:** Proves harness routing works. Also validates opencode's default cwd behavior differs from Claude — opencode defaults to projectRoot even without `--cwd`.
-
-#### 1.3 `run -h claude --agent reviewer` — interactive with agent
-
-```
-agentctl run -h claude --agent reviewer
+```json
+{
+  "name": "bare-interactive",
+  "description": "Bare interactive launch starts a session with no flags",
+  "command": "agentctl run -h {harness}",
+  "tags": ["interactive"],
+  "skipDryRun": true,
+  "expected": {
+    "claude": {
+      "live": ">",
+      "exitCode": 0
+    },
+    "opencode": {
+      "live": null,
+      "exitCode": 0,
+      "xfail": "opencode cannot spawn interactive session via agentctl"
+    }
+  }
+}
 ```
 
-**Asserts:**
-- `ARG[1]` is `--agent`, `ARG[2]` is `reviewer`
-- `TTY=yes`
+#### 02-interactive-agent.json
 
-**Why:** Validates that `--agent` is passed through to the harness binary in interactive mode. The agent name must match exactly — no path expansion, no `.md` suffix.
-
----
-
-### 2. Headless mode (--headless --prompt)
-
-#### 2.1 `run -h claude --headless --prompt "review the codebase"`
-
-```
-agentctl run -h claude --headless --prompt "review the codebase"
-```
-
-**Asserts:**
-- `ARG[1]` is `-p`, `ARG[2]` is `review the codebase` (single arg, not split on spaces)
-- Stub is invoked
-
-**Why:** Core headless path for Claude adapter. The prompt is passed via `-p`, not as a positional arg. Per-arg logging confirms the prompt survives as a single argument.
-
-#### 2.2 `run -h opencode --headless --prompt "review the codebase"`
-
-```
-agentctl run -h opencode --headless --prompt "review the codebase"
+```json
+{
+  "name": "interactive-agent",
+  "description": "Interactive launch with --agent loads the specified agent",
+  "command": "agentctl run -h {harness} --agent reviewer",
+  "tags": ["interactive"],
+  "skipDryRun": true,
+  "expected": {
+    "claude": {
+      "live": ">",
+      "exitCode": 0
+    },
+    "opencode": {
+      "live": null,
+      "exitCode": 0,
+      "xfail": "opencode cannot spawn interactive session via agentctl"
+    }
+  }
+}
 ```
 
-**Asserts:**
-- `ARG[1]` is `run` (opencode's headless subcommand)
-- `ARG[2]` is `review the codebase` (positional, single arg)
+### 2. Headless mode
 
-**Why:** OpenCode uses a different arg format than Claude for headless mode — `opencode run "prompt"` vs `claude -p "prompt"`. This test validates the adapter-specific mapping.
+#### 03-headless-prompt.json
 
-#### 2.3 `run -h claude --headless --prompt-file <absolute-path>`
-
-Setup: write `prompt.txt` with content `"You should review all files."` in the test project. Pass as an **absolute path** to avoid cwd ambiguity.
-
-**Asserts:**
-- `ARG[1]` is `-p`, `ARG[2]` is `You should review all files.` (file contents, not the path)
-- Stub is invoked
-
-**Why:** `--prompt-file` reads the file and passes its content inline. The adapter never passes a file path to the harness binary — it resolves the content first. Absolute path avoids the ambiguity of what cwd the path would resolve relative to.
-
-#### 2.4 `run -h claude --headless` (no --prompt, no --prompt-file)
-
-**Asserts:**
-- agentctl exits with code 1
-- stderr contains "Headless mode requires --prompt or --prompt-file"
-- Stub is NOT invoked (`assertNoInvocation`)
-
-**Why:** Headless without a prompt is a user error. Must fail before spawn.
-
-#### 2.5 `run -h claude --headless --prompt-file /nonexistent/path.txt`
-
-**Asserts:**
-- agentctl exits with code 1
-- stderr contains "Cannot read prompt file"
-- Stub is NOT invoked
-
-**Why:** Nonexistent prompt file must produce a clear error, not a stack trace.
-
-#### 2.6 `run -h claude --headless --prompt` with shell-hostile characters
-
-```
-agentctl run -h claude --headless --prompt 'say "hello" && echo $PATH `whoami`'
+```json
+{
+  "name": "headless-prompt",
+  "description": "Headless with inline prompt sends prompt and receives response",
+  "command": "agentctl run -h {harness} --headless --prompt \"respond with exactly: TEST_OK\"",
+  "tags": ["api", "slow"],
+  "expected": {
+    "claude": {
+      "dryRun": "claude -p respond with exactly: TEST_OK",
+      "live": "TEST_OK",
+      "exitCode": 0
+    },
+    "opencode": {
+      "dryRun": "opencode run respond with exactly: TEST_OK",
+      "live": "TEST_OK",
+      "exitCode": 0,
+      "xfail": "opencode headless not validated yet"
+    }
+  }
+}
 ```
 
-**Asserts:**
-- `ARG[2]` is exactly `say "hello" && echo $PATH \`whoami\`` — quotes, ampersands, dollar signs, and backticks all survive verbatim
-- Stub is invoked
+#### 04-headless-prompt-file.json
 
-**Why:** Prompts are user-supplied strings that may contain any character. `spawn()` with an args array (not a shell string) should preserve them, but this must be verified since shell metacharacters are a common source of bugs.
-
----
-
-### 3. Model class mapping
-
-#### 3.1 `run -h claude --model large`
-
-**Asserts:**
-- Args contain `--model` followed by `opus` (mapped from "large" → "opus" for claude)
-
-**Why:** Model classes are abstract ("large", "small") and each adapter maps them to harness-specific names. Validates the default mapping.
-
-#### 3.2 `run -h opencode --model large`
-
-**Asserts:**
-- Args contain `-m` followed by `anthropic/claude-opus-4-6` (opencode uses `-m`, not `--model`)
-
-**Why:** OpenCode uses a short flag (`-m`) and fully-qualified model identifiers. Different from Claude's `--model <shortname>`.
-
-#### 3.3 `run -h claude --model small`
-
-**Asserts:**
-- Args contain `--model` followed by `haiku`
-
-**Why:** Validates a second mapping to ensure the lookup isn't hardcoded to one class.
-
-#### 3.4 `run -h claude --model nonexistent`
-
-**Asserts:**
-- agentctl exits with code 1
-- stderr contains `No Claude mapping for model class "nonexistent"`
-- Stub is NOT invoked
-
-**Why:** Unknown model class must error before spawn. The error message must name the class so the user knows what to fix.
-
-#### 3.5 `run -h claude --model nonexistent --degraded-ok`
-
-**Asserts:**
-- Stub IS invoked
-- No arg is `--model` (model flag silently omitted, not set to empty)
-
-**Why:** `--degraded-ok` makes missing model mappings non-fatal. The session launches without a model override. Note: unlike capability degradation (which prints a warning), model degradation is silent — the flag is simply dropped.
-
-#### 3.6 Custom model mapping via project config
-
-Setup: use `custom-models` fixture where `.agentctl/models.json` overrides `small.claude` to `"custom-haiku"`.
-
-```
-agentctl run -h claude --model small
+```json
+{
+  "name": "headless-prompt-file",
+  "description": "Headless with --prompt-file reads file content and passes it inline",
+  "command": "agentctl run -h {harness} --headless --prompt-file {prompt_file}",
+  "tags": ["api", "slow"],
+  "expected": {
+    "claude": {
+      "dryRun": "claude -p respond with exactly: FILE_TEST_OK",
+      "live": "FILE_TEST_OK",
+      "exitCode": 0
+    },
+    "opencode": {
+      "dryRun": "opencode run respond with exactly: FILE_TEST_OK",
+      "live": "FILE_TEST_OK",
+      "exitCode": 0,
+      "xfail": "opencode headless not validated yet"
+    }
+  }
+}
 ```
 
-**Asserts:**
-- Args contain `--model` followed by `custom-haiku` (not the default `haiku`)
+#### 05-headless-no-prompt.json
 
-**Why:** Project-level config overrides defaults. Validates the three-layer config merge for model mappings.
+```json
+{
+  "name": "headless-no-prompt",
+  "description": "Headless without --prompt or --prompt-file fails before spawn",
+  "command": "agentctl run -h {harness} --headless",
+  "skipDryRun": true,
+  "expected": {
+    "claude": {
+      "error": "Headless mode requires --prompt or --prompt-file",
+      "exitCode": 1
+    },
+    "opencode": {
+      "error": "Headless mode requires --prompt or --prompt-file",
+      "exitCode": 1
+    }
+  }
+}
+```
 
----
+#### 06-headless-bad-prompt-file.json
 
-### 4. Environment variable passthrough
+```json
+{
+  "name": "headless-bad-prompt-file",
+  "description": "Headless with nonexistent prompt file fails cleanly",
+  "command": "agentctl run -h {harness} --headless --prompt-file /nonexistent/path.txt",
+  "skipDryRun": true,
+  "expected": {
+    "claude": {
+      "error": "Cannot read prompt file",
+      "exitCode": 1
+    },
+    "opencode": {
+      "error": "Cannot read prompt file",
+      "exitCode": 1
+    }
+  }
+}
+```
 
-#### 4.1 `run -h claude --env AGENTCTL_TEST_FOO=bar`
+#### 07-headless-agent-prompt.json
 
-**Asserts:**
-- Stub's logged environment contains `AGENTCTL_TEST_FOO=bar`
+```json
+{
+  "name": "headless-agent-prompt",
+  "description": "Headless with both --agent and --prompt composes correctly",
+  "command": "agentctl run -h {harness} --headless --prompt \"respond with exactly: AGENT_TEST_OK\" --agent reviewer",
+  "tags": ["api", "slow"],
+  "expected": {
+    "claude": {
+      "dryRun": "claude -p respond with exactly: AGENT_TEST_OK --agent reviewer",
+      "live": "AGENT_TEST_OK",
+      "exitCode": 0
+    },
+    "opencode": {
+      "dryRun": "opencode run respond with exactly: AGENT_TEST_OK --agent reviewer",
+      "live": "AGENT_TEST_OK",
+      "exitCode": 0,
+      "xfail": "opencode headless not validated yet"
+    }
+  }
+}
+```
 
-**Why:** `--env` vars must reach the child process. Validates the `spawn({ env: {...process.env, ...spec.env} })` merge.
+### 3. Model mapping
 
-#### 4.2 `run -h claude --env AGENTCTL_TEST_A=1 --env AGENTCTL_TEST_B=2`
+#### 08-model-large.json
 
-**Asserts:**
-- Stub's environment contains both `AGENTCTL_TEST_A=1` and `AGENTCTL_TEST_B=2`
+```json
+{
+  "name": "model-large",
+  "description": "Model class 'large' maps to harness-specific model name",
+  "command": "agentctl run -h {harness} --headless --prompt \"x\" --model large",
+  "skipLive": true,
+  "expected": {
+    "claude": {
+      "dryRun": "--model opus"
+    },
+    "opencode": {
+      "dryRun": "-m anthropic/claude-opus-4-6"
+    }
+  }
+}
+```
 
-**Why:** Multiple `--env` flags accumulate. Validates the variadic CLI option parsing.
+#### 09-model-small.json
 
-#### 4.3 `run -h claude --env INVALID`
+```json
+{
+  "name": "model-small",
+  "description": "Model class 'small' maps correctly (not hardcoded to one class)",
+  "command": "agentctl run -h {harness} --headless --prompt \"x\" --model small",
+  "skipLive": true,
+  "expected": {
+    "claude": {
+      "dryRun": "--model haiku"
+    },
+    "opencode": {
+      "dryRun": "-m anthropic/claude-haiku-4-5"
+    }
+  }
+}
+```
 
-**Asserts:**
-- agentctl exits with code 1
-- stderr contains `Invalid --env format: INVALID (expected KEY=VALUE)`
-- Stub is NOT invoked
+#### 10-model-nonexistent.json
 
-**Why:** Malformed env vars must fail early with a clear message.
+```json
+{
+  "name": "model-nonexistent",
+  "description": "Unknown model class fails with a message naming the class",
+  "command": "agentctl run -h {harness} --model nonexistent",
+  "skipDryRun": true,
+  "expected": {
+    "claude": {
+      "error": "No Claude mapping for model class \"nonexistent\"",
+      "exitCode": 1
+    },
+    "opencode": {
+      "error": "No OpenCode mapping for model class \"nonexistent\"",
+      "exitCode": 1
+    }
+  }
+}
+```
 
-#### 4.4 `run -h claude --env AGENTCTL_TEST_EMPTY=`
+#### 11-model-degraded-ok.json
 
-**Asserts:**
-- Stub's environment contains `AGENTCTL_TEST_EMPTY=` (key present, value is empty string)
-- Stub IS invoked
+```json
+{
+  "name": "model-degraded-ok",
+  "description": "Unknown model with --degraded-ok starts session without model flag",
+  "command": "agentctl run -h {harness} --model nonexistent --degraded-ok",
+  "tags": ["interactive"],
+  "expected": {
+    "claude": {
+      "dryRun": "claude",
+      "live": ">",
+      "exitCode": 0
+    },
+    "opencode": {
+      "dryRun": "opencode",
+      "live": null,
+      "exitCode": 0,
+      "xfail": "opencode cannot spawn interactive session via agentctl"
+    }
+  }
+}
+```
 
-**Why:** Empty values after `=` are valid. The parser splits on the first `=`, so `FOO=` produces key `FOO` with value `""`. Documents this as intentional behavior.
+Note: dry-run assertion should also verify `--model` is NOT present. Runner should support negative assertions.
 
-#### 4.5 `run -h claude --env AGENTCTL_TEST_EQ=bar=baz=qux`
+#### 12-model-custom-config.json
 
-**Asserts:**
-- Stub's environment contains `AGENTCTL_TEST_EQ=bar=baz=qux`
+```json
+{
+  "name": "model-custom-config",
+  "description": "Project models.json overrides default model mapping",
+  "command": "agentctl run -h {harness} --headless --prompt \"x\" --model small",
+  "fixture": "custom-models",
+  "skipLive": true,
+  "expected": {
+    "claude": {
+      "dryRun": "--model custom-haiku"
+    },
+    "opencode": {
+      "dryRun": "-m custom/model-override"
+    }
+  }
+}
+```
 
-**Why:** Values containing `=` are valid. The parser uses `indexOf("=")` and `slice()`, so only the first `=` is treated as the delimiter. Documents this edge case.
+### 4. Environment variables
 
----
+#### 13-env-single.json
+
+```json
+{
+  "name": "env-single",
+  "description": "Single --env var appears in command",
+  "command": "agentctl run -h {harness} --headless --prompt \"x\" --env FOO=bar",
+  "skipLive": true,
+  "expected": {
+    "claude": {
+      "dryRun": "FOO=bar claude"
+    },
+    "opencode": {
+      "dryRun": "FOO=bar opencode"
+    }
+  }
+}
+```
+
+#### 14-env-multiple.json
+
+```json
+{
+  "name": "env-multiple",
+  "description": "Multiple --env flags accumulate",
+  "command": "agentctl run -h {harness} --headless --prompt \"x\" --env A=1 --env B=2",
+  "skipLive": true,
+  "expected": {
+    "claude": {
+      "dryRun": "A=1 B=2 claude"
+    },
+    "opencode": {
+      "dryRun": "A=1 B=2 opencode"
+    }
+  }
+}
+```
+
+#### 15-env-malformed.json
+
+```json
+{
+  "name": "env-malformed",
+  "description": "Env var without = fails with clear message",
+  "command": "agentctl run -h {harness} --env INVALID",
+  "skipDryRun": true,
+  "expected": {
+    "claude": {
+      "error": "Invalid --env format: INVALID (expected KEY=VALUE)",
+      "exitCode": 1
+    },
+    "opencode": {
+      "error": "Invalid --env format: INVALID (expected KEY=VALUE)",
+      "exitCode": 1
+    }
+  }
+}
+```
+
+#### 16-env-empty-value.json
+
+```json
+{
+  "name": "env-empty-value",
+  "description": "FOO= is valid — empty string value",
+  "command": "agentctl run -h {harness} --headless --prompt \"x\" --env FOO=",
+  "skipLive": true,
+  "expected": {
+    "claude": {
+      "dryRun": "FOO= claude"
+    },
+    "opencode": {
+      "dryRun": "FOO= opencode"
+    }
+  }
+}
+```
+
+#### 17-env-equals-in-value.json
+
+```json
+{
+  "name": "env-equals-in-value",
+  "description": "Only first = is the delimiter — value can contain =",
+  "command": "agentctl run -h {harness} --headless --prompt \"x\" --env FOO=bar=baz",
+  "skipLive": true,
+  "expected": {
+    "claude": {
+      "dryRun": "FOO=bar=baz claude"
+    },
+    "opencode": {
+      "dryRun": "FOO=bar=baz opencode"
+    }
+  }
+}
+```
 
 ### 5. Working directory
 
-#### 5.1 `run -h claude --cwd /tmp`
+#### 18-cwd.json
 
-**Asserts:**
-- Args contain `--cwd` followed by `/tmp`
+```json
+{
+  "name": "cwd",
+  "description": "Claude passes --cwd as flag; opencode does not (uses spawn cwd)",
+  "command": "agentctl run -h {harness} --headless --prompt \"x\" --cwd /tmp",
+  "skipLive": true,
+  "expected": {
+    "claude": {
+      "dryRun": "--cwd /tmp"
+    },
+    "opencode": {
+      "dryRun": "opencode run x",
+      "dryRunNotContains": "--cwd"
+    }
+  }
+}
+```
 
-**Why:** Claude adapter passes `--cwd` as a flag to the binary (it does NOT set spawn's `cwd`).
+### 6. Full composition
 
-#### 5.2 `run -h opencode --cwd /tmp`
+#### 19-dry-run-full-composition.json
 
-**Asserts:**
-- Stub's `CWD` is `/tmp` (logged by `pwd` in stub)
-- Args do NOT contain `--cwd` (opencode uses spawn's `cwd` option, not a flag)
+```json
+{
+  "name": "dry-run-full-composition",
+  "description": "All flags compose correctly in dry-run output",
+  "command": "agentctl run -h {harness} --headless --prompt \"review\" --agent reviewer --model large --env KEY=val --cwd /tmp",
+  "skipLive": true,
+  "expected": {
+    "claude": {
+      "dryRun": "KEY=val claude -p review --agent reviewer --model opus --cwd /tmp"
+    },
+    "opencode": {
+      "dryRun": "KEY=val opencode run review --agent reviewer -m anthropic/claude-opus-4-6",
+      "dryRunNotContains": "--cwd"
+    }
+  }
+}
+```
 
-**Why:** OpenCode adapter sets `cwd` on the spawn options, not as an arg. Different mechanism than Claude — worth verifying both the presence of `cwd` and the absence of the flag.
+### 7. Error cases
 
-#### 5.3 `run -h opencode` (no --cwd)
+#### 20-unknown-harness.json
 
-**Asserts:**
-- Stub's `CWD` is the project root (default fallback for opencode)
+```json
+{
+  "name": "unknown-harness",
+  "description": "Unknown harness ID fails with available harness list",
+  "command": "agentctl run -h nonexistent",
+  "skipDryRun": true,
+  "expected": {
+    "_global": {
+      "error": "Unknown harness: nonexistent",
+      "exitCode": 1
+    }
+  }
+}
+```
 
-**Why:** OpenCode defaults `cwd` to `projectRoot` when not specified. Claude leaves it undefined (inherits parent's cwd). This is a behavioral difference between adapters.
+Note: `_global` key means this test runs once, not per-harness.
 
-#### 5.4 `run -h claude` (no --cwd)
+### 8. Signal handling
 
-**Asserts:**
-- Stub's `CWD` is the tmux session's starting directory (inherited from parent, not forced to project root)
-- Args do NOT contain `--cwd`
+#### 21-signal-ctrl-c.json
 
-**Why:** Claude adapter does not set a default `cwd` — the child inherits the parent's working directory. This is the opposite of opencode's behavior and must be verified to document the asymmetry.
+```json
+{
+  "name": "signal-ctrl-c",
+  "description": "Ctrl+C cleanly terminates session with no zombies",
+  "command": "agentctl run -h {harness}",
+  "tags": ["interactive", "signal"],
+  "skipDryRun": true,
+  "expected": {
+    "claude": {
+      "live": ">",
+      "signal": "C-c",
+      "exitCode": 0
+    },
+    "opencode": {
+      "live": null,
+      "signal": "C-c",
+      "exitCode": 0,
+      "xfail": "opencode cannot spawn interactive session via agentctl"
+    }
+  }
+}
+```
+
+#### 22-signal-exit-code.json
+
+```json
+{
+  "name": "signal-exit-code",
+  "description": "Exit code after SIGINT should be 130 (128+SIGINT) — currently 0 due to known bug",
+  "command": "agentctl run -h {harness} ; echo EXIT_CODE=$?",
+  "tags": ["interactive", "signal"],
+  "skipDryRun": true,
+  "expected": {
+    "claude": {
+      "live": ">",
+      "signal": "C-c",
+      "exitCode": 130,
+      "xfail": "run.ts uses code ?? 0 which loses signal information"
+    },
+    "opencode": {
+      "live": null,
+      "signal": "C-c",
+      "exitCode": 130,
+      "xfail": "opencode interactive + signal exit code both broken"
+    }
+  }
+}
+```
 
 ---
 
-### 6. Dry run
+## Adding a test case
 
-#### 6.1 `run -h claude --headless --prompt "hello" --dry-run`
+Write one JSON file in `tests/cases/`. Include `expected` entries for each harness. Done.
 
-Uses `waitForSessionExit` to capture output after the process exits (avoids race between print and tmux pane flush).
+## Adding a harness
 
-**Asserts:**
-- Captured output contains `claude -p hello`
-- agentctl exits with code 0
-- Stub is NOT invoked (`assertNoInvocation`)
-
-**Why:** `--dry-run` must print the command and exit without spawning. Users rely on this to preview what will run.
-
-#### 6.2 `run -h claude --headless --prompt "hello" --env FOO=bar --dry-run`
-
-**Asserts:**
-- Captured output contains `FOO=bar claude -p hello`
-
-**Why:** Dry run output must include env var prefix so the user sees the full invocation.
-
----
-
-### 7. Combined flags
-
-#### 7.1 Full flag combination (claude)
-
-```
-agentctl run -h claude --headless --prompt "review" --agent reviewer --model large --env AGENTCTL_TEST_KEY=secret --cwd /tmp
-```
-
-**Asserts:**
-- Args contain (in any order): `-p` `review`, `--agent` `reviewer`, `--model` `opus`, `--cwd` `/tmp`
-- Env contains `AGENTCTL_TEST_KEY=secret`
-- Stub invoked
-- `ARGC` matches expected count
-
-**Why:** All flags must compose correctly. No flag should clobber another. ARGC check catches stray or missing args.
-
-#### 7.2 Full flag combination (opencode)
-
-```
-agentctl run -h opencode --headless --prompt "review" --agent reviewer --model large --env AGENTCTL_TEST_KEY=secret --cwd /tmp
-```
-
-**Asserts:**
-- Args contain: `run`, `review` (positional), `--agent` `reviewer`, `-m` `anthropic/claude-opus-4-6`
-- Env contains `AGENTCTL_TEST_KEY=secret`
-- Stub's `CWD` is `/tmp`
-- Args do NOT contain `--cwd` (opencode uses spawn cwd)
-
-**Why:** Same composition test for the other adapter. Validates that adapter-specific arg formats hold under full flag load. Explicitly checks the cwd mechanism difference.
-
----
-
-### 8. Error cases
-
-#### 8.1 Unknown harness
-
-```
-agentctl run -h nonexistent
-```
-
-**Asserts:**
-- Exit code 1
-- stderr contains "Unknown harness: nonexistent"
-- stderr contains "Available:" with known harness IDs
-- Stub is NOT invoked
-
-**Why:** Fails fast with actionable guidance.
-
-#### 8.2 Exit code propagation
-
-Setup: use `claude-exit` stub variant. Set `AGENTCTL_TEST_EXIT_CODE=42`.
-
-**Asserts:**
-- agentctl exits with code 42
-
-**Why:** The CLI must forward the child process exit code to the caller. Scripts and CI depend on this.
-
-#### 8.3 Harness binary not on PATH
-
-Setup: do NOT place any stub on PATH. Override PATH to contain only system essentials (no `claude` or `opencode`).
-
-**Asserts:**
-- agentctl exits with non-zero code
-- stderr contains a meaningful error (not an unhandled Node.js stack trace)
-
-**Why:** Currently `run.ts` has no `child.on("error")` handler, so `spawn` failing (ENOENT) produces an ugly crash. This test documents the expected behavior and will fail until the product code adds error handling. **Known product bug — this test should be written to assert the desired behavior, not the current broken behavior.**
-
----
-
-### 9. Signal handling
-
-#### 9.1 Ctrl+C in interactive session
-
-Setup: start interactive session in tmux with the signal-aware stub, send `C-c` via `tmux send-keys`.
-
-**Asserts:**
-- Stub's log contains `SIGNAL=INT` (signal was received)
-- tmux session terminates (pane closes)
-- No zombie processes left behind (`pgrep` for the stub PID returns empty)
-
-**Why:** Users expect Ctrl+C to cleanly stop both agentctl and the harness. With `stdio: "inherit"`, the terminal sends SIGINT to the entire foreground process group.
-
-#### 9.2 SIGTERM to child — exit code reflects signal
-
-Setup: start session, get the stub's PID from tmux (`#{pane_pid}`), send SIGTERM.
-
-**Asserts:**
-- agentctl exits with code 143 (128 + 15 for SIGTERM) OR exits with code 0 (documenting current behavior of `code ?? 0`)
-
-**Why:** Unix convention is exit code 128 + signal number for signal-killed processes. The current code uses `code ?? 0`, which loses signal information (the `close` event provides `(null, 'SIGTERM')` but only `code` is checked). This test documents the actual behavior. **If the product is fixed to handle signals properly, update the assertion to expect 143.**
-
----
-
-### 10. Prompt edge cases
-
-#### 10.1 Empty prompt
-
-```
-agentctl run -h claude --headless --prompt ""
-```
-
-**Asserts:**
-- Document actual behavior: does the adapter pass `-p ""` to the harness, or does it error?
-- If it passes through: `ARG[2]` is empty string, stub is invoked
-- If it errors: exit code 1, meaningful message
-
-**Why:** Empty prompts are a likely user mistake. The current code has no guard — the empty string is passed through. This test locks in the behavior so a future change is intentional.
+Add an `expected` entry to each case file in `tests/cases/`. The runner picks it up. Use `xfail` for known-broken scenarios while bringing the harness up.
 
 ---
 
 ## Test count summary
 
-| Category                         | Tests |
-|----------------------------------|-------|
-| Interactive session              | 3     |
-| Headless mode                    | 6     |
-| Model class mapping              | 6     |
-| Environment variable passthrough | 5     |
-| Working directory                | 4     |
-| Dry run                          | 2     |
-| Combined flags                   | 2     |
-| Error cases                      | 3     |
-| Signal handling                  | 2     |
-| Prompt edge cases                | 1     |
-| **Total**                        | **34**|
+| # | Name | Dry-run | Live | API | Signal |
+|---|---|---|---|---|---|
+| 01 | bare-interactive | — | per-harness | — | — |
+| 02 | interactive-agent | — | per-harness | — | — |
+| 03 | headless-prompt | per-harness | per-harness | yes | — |
+| 04 | headless-prompt-file | per-harness | per-harness | yes | — |
+| 05 | headless-no-prompt | — | per-harness | — | — |
+| 06 | headless-bad-prompt-file | — | per-harness | — | — |
+| 07 | headless-agent-prompt | per-harness | per-harness | yes | — |
+| 08 | model-large | per-harness | — | — | — |
+| 09 | model-small | per-harness | — | — | — |
+| 10 | model-nonexistent | — | per-harness | — | — |
+| 11 | model-degraded-ok | per-harness | per-harness | — | — |
+| 12 | model-custom-config | per-harness | — | — | — |
+| 13 | env-single | per-harness | — | — | — |
+| 14 | env-multiple | per-harness | — | — | — |
+| 15 | env-malformed | — | per-harness | — | — |
+| 16 | env-empty-value | per-harness | — | — | — |
+| 17 | env-equals-in-value | per-harness | — | — | — |
+| 18 | cwd | per-harness | — | — | — |
+| 19 | full-composition | per-harness | — | — | — |
+| 20 | unknown-harness | — | once | — | — |
+| 21 | signal-ctrl-c | — | per-harness | — | yes |
+| 22 | signal-exit-code | — | per-harness | — | yes |
+
+**With 2 harnesses:**
+- Dry-run executions: 24
+- Live executions: 23
+- Total test runs: 47
+- API-hitting: 6
+- Signal tests: 4
 
 ---
 
-## Known product issues to track
+## Known issues tracked
 
-These were discovered during test design and should be fixed independently:
-
-1. **No `child.on("error")` handler** (`src/cli/run.ts:97`) — spawn failure (binary not found) produces unhandled Node.js error instead of clean message. Covered by test 8.3.
-2. **Signal exit codes lost** (`src/cli/run.ts:104`) — `code ?? 0` discards signal information. Child killed by SIGINT exits as 0 instead of 130. Covered by test 9.2.
-3. **Asymmetric cwd defaults** — Claude inherits parent cwd, OpenCode defaults to projectRoot. May be intentional but should be documented. Covered by tests 5.3/5.4.
+| Issue | Test(s) | xfail in |
+|---|---|---|
+| opencode interactive launch | 01, 02, 11, 21, 22 | opencode |
+| opencode headless | 03, 04, 07 | opencode |
+| Signal exit code `code ?? 0` | 22 | all harnesses |
+| Missing `child.on("error")` | not yet covered | — |

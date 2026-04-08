@@ -1,0 +1,21 @@
+{
+  "name": "model-degraded-ok",
+  "description": "Unknown model with --degraded-ok starts session without model flag",
+  "command": "agentctl run -h {harness} --model nonexistent --degraded-ok",
+  "tags": ["interactive"],
+  "expected": {
+    "claude": {
+      "dryRun": "claude",
+      "dryRunNotContains": "--model",
+      "live": ">",
+      "exitCode": 0
+    },
+    "opencode": {
+      "dryRun": "opencode",
+      "dryRunNotContains": "--model",
+      "live": null,
+      "exitCode": 0,
+      "xfail": "opencode cannot spawn interactive session via agentctl"
+    }
+  }
+}

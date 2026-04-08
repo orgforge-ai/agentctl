@@ -9,7 +9,10 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "start": "node dist/cli/index.js"
+    "start": "node dist/cli/index.js",
+    "test": "tsx --test tests/runner.ts",
+    "test:fast": "tsx --test tests/runner.ts --exclude=api,slow",
+    "test:dry-run-only": "tsx --test tests/runner.ts --exclude=api,slow,interactive,signal"
   },
   "engines": {
     "node": ">=20"
@@ -20,6 +23,8 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "strip-ansi": "^7.2.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.7.0"
   }
 }

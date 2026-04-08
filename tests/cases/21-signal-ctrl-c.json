@@ -1,0 +1,20 @@
+{
+  "name": "signal-ctrl-c",
+  "description": "Ctrl+C cleanly terminates session with no zombies",
+  "command": "agentctl run -h {harness}",
+  "tags": ["interactive", "signal"],
+  "skipDryRun": true,
+  "expected": {
+    "claude": {
+      "live": ">",
+      "signal": "C-c",
+      "exitCode": 0
+    },
+    "opencode": {
+      "live": null,
+      "signal": "C-c",
+      "exitCode": 0,
+      "xfail": "opencode cannot spawn interactive session via agentctl"
+    }
+  }
+}

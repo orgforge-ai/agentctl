@@ -1,0 +1,14 @@
+{
+  "name": "env-single",
+  "description": "Single --env var appears in command",
+  "command": "agentctl run -h {harness} --headless --prompt \"x\" --env FOO=bar",
+  "skipLive": true,
+  "expected": {
+    "claude": {
+      "dryRun": "FOO=bar claude"
+    },
+    "opencode": {
+      "dryRun": "FOO=bar opencode"
+    }
+  }
+}

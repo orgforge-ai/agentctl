@@ -1,0 +1,18 @@
+{
+  "name": "interactive-agent",
+  "description": "Interactive launch with --agent loads the specified agent",
+  "command": "agentctl run -h {harness} --agent reviewer",
+  "tags": ["interactive"],
+  "skipDryRun": true,
+  "expected": {
+    "claude": {
+      "live": ">",
+      "exitCode": 0
+    },
+    "opencode": {
+      "live": null,
+      "exitCode": 0,
+      "xfail": "opencode cannot spawn interactive session via agentctl"
+    }
+  }
+}
