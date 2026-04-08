@@ -29,6 +29,11 @@ const excludeTags = new Set(
   process.env.EXCLUDE_TAGS ? process.env.EXCLUDE_TAGS.split(",") : []
 );
 
+// Optional name filter: TEST_ONLY=bare-interactive,model-large
+const onlyNames = process.env.TEST_ONLY
+  ? new Set(process.env.TEST_ONLY.split(","))
+  : null;
+
 function assertContains(
   text: string,
   pattern: string | RegExp,
@@ -72,6 +77,9 @@ before(() => {
 
 for (const testCase of cases) {
   if (testCase.tags?.some((t) => excludeTags.has(t))) {
+    continue;
+  }
+  if (onlyNames && !onlyNames.has(testCase.name)) {
     continue;
   }
 

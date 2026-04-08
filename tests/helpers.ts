@@ -169,6 +169,17 @@ export async function createTestProject(
     // No .claude.json — skip patching
   }
 
+  // Sync agents so harnesses can find them (runs outside log capture)
+  try {
+    execSync("agentctl sync", {
+      cwd: projectDir,
+      env: { ...process.env, HOME: homeDir },
+      stdio: "pipe",
+    });
+  } catch {
+    // No agents or sync not needed — tests will fail naturally
+  }
+
   // Log file lives in the stable output dir
   const logPath = path.join(outputDir, "output.log");
 

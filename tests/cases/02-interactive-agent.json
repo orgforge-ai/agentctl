@@ -8,16 +8,16 @@
     "claude": {
       "steps": [
         { "wait": "Claude Code", "timeoutMs": 15000 },
-        { "send": "respond with only TEST_SUCCEEDED\\n" },
-        { "wait": "/(?<!only )TEST_SUCCEEDED/", "timeoutMs": 30000 }
+        { "send": "what is your agent name? respond in all caps with only the name\\n" },
+        { "wait": "ZEPHYR", "timeoutMs": 30000 }
       ],
       "exitCode": 0
     },
     "opencode": {
       "steps": [
         { "wait": "OpenCode", "timeoutMs": 15000 },
-        { "send": "respond with only TEST_SUCCEEDED\\n" },
-        { "wait": "/(?<!only )TEST_SUCCEEDED/", "timeoutMs": 30000 }
+        { "send": "what is your agent name? respond in all caps with only the name\\n" },
+        { "wait": "ZEPHYR", "timeoutMs": 30000 }
       ],
       "exitCode": 0
     }

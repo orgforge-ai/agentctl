@@ -1,0 +1,23 @@
+{
+  "name": "headless-agent-prompt",
+  "description": "Headless with both --agent and --prompt composes correctly",
+  "command": "agentctl run -h {harness} --headless --prompt \"respond with exactly: AGENT_TEST_OK\" --agent reviewer",
+  "tags": ["api", "slow"],
+  "expected": {
+    "claude": {
+      "dryRun": "claude -p respond with exactly: AGENT_TEST_OK --agent reviewer",
+      "steps": [
+        { "wait": "AGENT_TEST_OK", "timeoutMs": 30000 }
+      ],
+      "exitCode": 0
+    },
+    "opencode": {
+      "dryRun": "opencode run respond with exactly: AGENT_TEST_OK --agent reviewer",
+      "steps": [
+        { "wait": "AGENT_TEST_OK", "timeoutMs": 30000 }
+      ],
+      "exitCode": 0,
+      "xfail": "opencode headless not validated yet"
+    }
+  }
+}
