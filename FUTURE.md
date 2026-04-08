@@ -1,51 +1,41 @@
 # agentctl Future Stages
 
-This document covers features deferred from v1. See `DESIGN.md` for the current scope.
+This document covers features deferred from the current implementation in `DESIGN.md`.
 
-## Stage 2: Skills
+## Stage 2: Advanced Skill Support
 
-### Rationale for Deferral
+Basic skill resources now exist in the portable model. The next layer of work is not “whether skills exist,” but how deeply agentctl should model harness-specific skill behavior.
 
-Skills are deeply coupled to harness-specific tool surfaces. A Claude Code skill that references `Read`, `Edit`, and `Bash` tools cannot be trivially ported to Codex or OpenCode, which have different tool names and execution models. Attempting to generalize skills before understanding real cross-harness usage patterns would produce a leaky abstraction.
+### Open Questions
 
-### When to Revisit
+- should adapters expose explicit skill capability levels such as `native`, `emulated`, or `unsupported`
+- should agentctl model per-harness skill permissions and allow/ask/deny states
+- should skill activation be purely directory-based, or should `agentctl run` eventually support explicit skill selection
+- should skill import from existing harness directories be supported the same way agent import is supported today
 
-After v1 ships and at least two adapters (Claude + Codex) are in use, observe:
+### Possible Directions
 
-- which skills users actually want to share across harnesses
-- whether the portable parts of a skill (prompt text, description) are sufficient without tool portability
-- whether "emulated" skill support (injecting skill prompts as system context) is good enough
+1. **Capability modeling**
+   Extend adapter capabilities with a dedicated skill support field.
 
-### Proposed Approach
+2. **Permission modeling**
+   Add optional per-adapter settings for harnesses that support skill enable/disable controls.
 
-```text
-.agentctl/skills/<name>/
-  skill.json
-  SKILL.md
-  assets/
-  scripts/
-```
+3. **Explicit activation**
+   Add `run --skill <name>` only if multiple harnesses can support equivalent behavior cleanly.
 
-Adapter capabilities would expand:
+4. **Skill import**
+   Support importing existing skill directories from harness-native locations into `.agentctl/skills/`.
 
-```ts
-type HarnessCapabilities = {
-  // ...existing fields
-  skills: "native" | "emulated" | "unsupported";
-};
-```
-
-"Emulated" means the adapter injects the skill's prompt content into the agent context rather than registering it as a native skill. This is a reasonable fallback for harnesses without native skill support.
-
-## Stage 2: Plugins
+## Stage 3: Plugins
 
 ### Rationale for Deferral
 
-Plugin packaging and lifecycle semantics vary significantly across harnesses. MCP servers, Claude Code plugins, and Codex extensions have fundamentally different installation, configuration, and execution models. Portable plugin abstraction requires at least two harnesses with comparable plugin semantics.
+Plugin packaging and lifecycle semantics vary significantly across harnesses. MCP servers, Claude Code plugins, and future Codex/OpenCode extension systems have different installation, configuration, and execution models.
 
 ### When to Revisit
 
-When at least two supported harnesses have plugin/extension systems mature enough to compare. Currently Claude Code has MCP and plugins; Codex and OpenCode plugin models are less mature.
+When at least two supported harnesses have plugin systems mature enough to compare directly.
 
 ### Proposed Approach
 
@@ -60,75 +50,78 @@ type HarnessCapabilities = {
 };
 ```
 
-## Stage 3: Memory Portability
+## Stage 4: Memory Portability
 
 ### Rationale for Deferral
 
-Memory is fundamentally different from agent definitions:
+Memory is fundamentally different from agents and skills:
 
-- **Definitions are static and declarative.** A prompt file doesn't change during a session.
-- **Memory is dynamic and temporal.** It accumulates during sessions and reflects harness-specific learnings.
-- **Memory flows the wrong direction.** Definitions flow from agentctl into harnesses. Memory flows from harnesses back out. Bolting bidirectional sync onto a one-directional model adds significant complexity.
-- **Memory may not be portable.** Learnings accumulated in Claude Code (e.g., "the Bash tool requires quoting paths with spaces") may be meaningless or harmful in a different harness.
+- **Definitions are static and declarative.**
+- **Memory is dynamic and temporal.**
+- **Memory flows the wrong direction.** Definitions flow from agentctl into harnesses. Memory would have to flow back out.
+- **Memory may not be portable.** Harness-specific learnings can be meaningless or harmful elsewhere.
 
 ### Current State
 
-Claude Code stores per-project memory at `~/.claude/projects/<path-encoded-name>/memory/`. Other harnesses have their own memory locations and formats.
+Claude Code stores per-project memory under `~/.claude/projects/...`. Other harnesses have their own locations and formats.
 
 ### When to Revisit
 
 After observing real multi-harness usage:
 
-- do users actually switch the same project between harnesses?
-- is there memory that is genuinely portable (project architecture knowledge vs. harness-specific tips)?
-- can memory be cleanly split into "project knowledge" (portable) and "harness knowledge" (not portable)?
+- do users switch the same repo between harnesses often enough to justify memory sync
+- is there a useful subset of memory that is genuinely portable
+- can memory be split into project knowledge versus harness knowledge
 
 ### Possible Approaches
 
-1. **Sync-back model**: On `agentctl sync --collect`, pull memory from harness directories into `.agentctl/`. Harness remains the writer; agentctl is the aggregator.
+1. **Sync-back model**
+   On `agentctl sync --collect`, pull memory from harness directories into agentctl-managed storage.
 
-2. **Shared memory layer**: agentctl owns a memory directory, adapters symlink or copy to/from it. Requires solving merge semantics for free-form markdown.
+2. **Shared memory layer**
+   agentctl owns a memory directory and adapters copy or link to it.
 
-3. **Memory tagging**: Memory entries are tagged with source harness. Portable entries are synced; harness-specific entries stay local.
+3. **Tagged memory**
+   Memory entries are tagged by source harness and only portable entries are shared.
 
-None of these are ready for implementation without real usage data.
+## Stage 5: Import from Additional Harnesses
 
-## Stage 3: Import from Additional Harnesses
+Current import support is `agentctl init --from claude` for agents only.
 
-v1 supports `agentctl init --from claude` only. Extending import to other harnesses requires:
+Future import work includes:
 
-- understanding each harness's native agent/config format
-- mapping harness-specific fields to the portable manifest
-- deciding what to do with harness-specific fields that have no portable equivalent
+- agent import from additional harnesses
+- skill import from harness-native `skills/` directories
+- mapping harness-specific metadata into portable manifests
+- deciding what to do with harness-native fields that have no portable equivalent
 
-Add import support for each harness as its adapter matures.
-
-## Stage 4: Remote Registries
+## Stage 6: Remote Registries
 
 ### Concept
 
-A registry for sharing portable agents and (eventually) skills across teams or publicly.
+A registry for sharing portable agents and skills across teams or publicly.
 
 ```bash
 agentctl registry search "code reviewer"
 agentctl registry install @org/reviewer
 agentctl registry publish ./agents/reviewer
+agentctl registry publish ./skills/postgres-migrate
 ```
 
 ### Prerequisites
 
-- stable resource manifest schema (v1 must prove the schema works)
+- stable resource manifest schemas
 - versioning strategy for published resources
 - authentication and access control model
-- decision on hosting (npm registry, custom, GitHub releases, etc.)
+- decision on hosting
 
 ### Open Questions
 
-- is this a package registry (like npm) or a catalog (like Terraform Registry)?
-- should published agents include model mappings or leave those to the consumer?
-- how are agent updates handled (pinned versions vs. floating)?
+- is this a package registry or a catalog
+- should published resources include model mappings or leave those to the consumer
+- how are updates handled
 
-## Stage 4: Background Daemons
+## Stage 7: Background Daemons
 
 ### Concept
 
@@ -141,25 +134,25 @@ agentctl watch --harness claude
 
 ### Risks
 
-- re-entrancy: harness file watchers could detect changes from sync, triggering cascading updates
+- re-entrancy between agentctl and harness file watchers
 - resource usage on large repos
-- complexity of daemon lifecycle management
+- daemon lifecycle complexity
 
 ### Prerequisites
 
 - sync must be proven idempotent and safe to run repeatedly
-- clear re-entrancy guards (e.g., lockfiles, debouncing, marker-file detection)
+- clear re-entrancy guards
 
-## Stage 5: Normalized Headless Output
+## Stage 8: Normalized Headless Output
 
 ### Concept
 
-`agentctl run --headless` could return structured JSON output normalized across harnesses, rather than passing through raw harness stdout.
+`agentctl run --headless` could eventually return structured JSON output normalized across harnesses instead of passing through raw harness stdout.
 
 ### Open Questions
 
-- what does a "normalized result" look like for a coding agent run?
-- is this even desirable, or do CI/CD consumers prefer harness-native output?
-- how do you normalize success/failure when different harnesses define it differently?
+- what does a normalized result look like for coding-agent runs
+- is this desirable, or do CI/CD consumers prefer harness-native output
+- how should success and failure be normalized across harnesses
 
-This should be driven by real CI/CD integration needs, not designed speculatively.
+This should be driven by real CI/CD integration needs rather than designed speculatively.
