@@ -168,6 +168,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
 
     // Apply adapter overrides
     const overrides = agent.manifest.adapterOverrides?.["opencode"] ?? {};
+    if (overrides["color"]) fmLines.push(`color: "${overrides["color"]}"`);
     if (overrides["mode"]) fmLines.push(`mode: ${overrides["mode"]}`);
     if (overrides["temperature"] !== undefined)
       fmLines.push(`temperature: ${overrides["temperature"]}`);
