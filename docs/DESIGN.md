@@ -1,5 +1,9 @@
 # agentctl Design
 
+This document mixes current implementation details with intended direction.
+`agentctl` is still an early prototype, so treat this as design guidance rather
+than a stability guarantee for the CLI, config schema, or generated artifacts.
+
 ## Goal
 
 `agentctl` is a portable control plane for coding-agent harnesses such as Claude Code, OpenCode, Codex, and future runtimes.
