@@ -24,6 +24,58 @@ import { syncAgents } from "./sync-utils.js";
 
 const execFileAsync = promisify(execFile);
 
+function formatYamlScalar(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "boolean") return String(value);
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") return `"${value}"`;
+  return null;
+}
+
+function buildFrontmatterLines(
+  canonical: Record<string, string>,
+  overrides: Record<string, unknown>,
+): string[] {
+  const lines: string[] = [];
+  const consumed = new Set<string>();
+
+  for (const [k, canonicalVal] of Object.entries(canonical)) {
+    consumed.add(k);
+    if (k in overrides) {
+      const ov = overrides[k];
+      if (ov === null || ov === undefined) continue;
+      if (typeof ov === "object" && !Array.isArray(ov)) {
+        lines.push(`${k}:`);
+        for (const [sk, sv] of Object.entries(ov as Record<string, unknown>)) {
+          const fv = formatYamlScalar(sv);
+          if (fv !== null) lines.push(`  ${sk}: ${fv}`);
+        }
+      } else {
+        const fv = formatYamlScalar(ov);
+        if (fv !== null) lines.push(`${k}: ${fv}`);
+      }
+    } else {
+      lines.push(`${k}: ${canonicalVal}`);
+    }
+  }
+
+  for (const [k, v] of Object.entries(overrides)) {
+    if (consumed.has(k) || v === null || v === undefined) continue;
+    if (typeof v === "object" && !Array.isArray(v)) {
+      lines.push(`${k}:`);
+      for (const [sk, sv] of Object.entries(v as Record<string, unknown>)) {
+        const fv = formatYamlScalar(sv);
+        if (fv !== null) lines.push(`  ${sk}: ${fv}`);
+      }
+    } else {
+      const fv = formatYamlScalar(v);
+      if (fv !== null) lines.push(`${k}: ${fv}`);
+    }
+  }
+
+  return lines;
+}
+
 function parseClaudeAgentFrontmatter(
   content: string,
 ): Record<string, unknown> {
@@ -119,42 +171,32 @@ export class ClaudeAdapter implements HarnessAdapter {
     const { agent, context } = input;
     const parts: string[] = [];
 
-    // Build frontmatter
-    const fm: Record<string, string> = {};
-    if (agent.manifest.name) fm["name"] = `"${agent.manifest.name}"`;
+    const canonical: Record<string, string> = {};
+    if (agent.manifest.name) canonical["name"] = `"${agent.manifest.name}"`;
     if (agent.manifest.description)
-      fm["description"] = `"${agent.manifest.description}"`;
+      canonical["description"] = `"${agent.manifest.description}"`;
     if (agent.manifest.defaultModelClass) {
-      const modelClass = agent.manifest.defaultModelClass;
-      const mapping = context.models.modelClasses[modelClass];
+      const mapping = context.models.modelClasses[agent.manifest.defaultModelClass];
       const claudeModel = mapping?.["claude"];
-      if (claudeModel) fm["model"] = claudeModel;
+      if (claudeModel) canonical["model"] = claudeModel;
     }
 
-    const overrides = agent.manifest.adapterOverrides?.["claude"] ?? {};
-    if (overrides["color"]) fm["color"] = String(overrides["color"]);
+    const overrides = (agent.manifest.adapterOverrides?.["claude"] ?? {}) as Record<string, unknown>;
+    const fmLines = buildFrontmatterLines(canonical, overrides);
 
-    if (Object.keys(fm).length > 0) {
+    if (fmLines.length > 0) {
       parts.push("---");
-      for (const [k, v] of Object.entries(fm)) {
-        parts.push(`${k}: ${v}`);
-      }
+      parts.push(...fmLines);
       parts.push("---");
       parts.push("");
     }
 
-    // Add prompt content
     if (agent.prompt) {
       parts.push(agent.prompt);
     }
 
     const fileName = `${agent.manifest.name}.md`;
-    return [
-      {
-        relativePath: fileName,
-        content: parts.join("\n"),
-      },
-    ];
+    return [{ relativePath: fileName, content: parts.join("\n") }];
   }
 
   async importAgents(context: AdapterContext): Promise<ImportedAgent[]> {

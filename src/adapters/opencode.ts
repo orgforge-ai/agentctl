@@ -24,6 +24,58 @@ import { syncAgents } from "./sync-utils.js";
 
 const execFileAsync = promisify(execFile);
 
+function formatYamlScalar(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "boolean") return String(value);
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string") return `"${value}"`;
+  return null;
+}
+
+function buildFrontmatterLines(
+  canonical: Record<string, string>,
+  overrides: Record<string, unknown>,
+): string[] {
+  const lines: string[] = [];
+  const consumed = new Set<string>();
+
+  for (const [k, canonicalVal] of Object.entries(canonical)) {
+    consumed.add(k);
+    if (k in overrides) {
+      const ov = overrides[k];
+      if (ov === null || ov === undefined) continue;
+      if (typeof ov === "object" && !Array.isArray(ov)) {
+        lines.push(`${k}:`);
+        for (const [sk, sv] of Object.entries(ov as Record<string, unknown>)) {
+          const fv = formatYamlScalar(sv);
+          if (fv !== null) lines.push(`  ${sk}: ${fv}`);
+        }
+      } else {
+        const fv = formatYamlScalar(ov);
+        if (fv !== null) lines.push(`${k}: ${fv}`);
+      }
+    } else {
+      lines.push(`${k}: ${canonicalVal}`);
+    }
+  }
+
+  for (const [k, v] of Object.entries(overrides)) {
+    if (consumed.has(k) || v === null || v === undefined) continue;
+    if (typeof v === "object" && !Array.isArray(v)) {
+      lines.push(`${k}:`);
+      for (const [sk, sv] of Object.entries(v as Record<string, unknown>)) {
+        const fv = formatYamlScalar(sv);
+        if (fv !== null) lines.push(`  ${sk}: ${fv}`);
+      }
+    } else {
+      const fv = formatYamlScalar(v);
+      if (fv !== null) lines.push(`${k}: ${fv}`);
+    }
+  }
+
+  return lines;
+}
+
 function parseYamlFrontmatter(content: string): Record<string, unknown> {
   const normalized = content.replace(/\r\n/g, "\n");
   const match = normalized.match(/^---\n([\s\S]*?)\n---/);
@@ -153,34 +205,17 @@ export class OpenCodeAdapter implements HarnessAdapter {
     const { agent, context } = input;
     const parts: string[] = [];
 
-    // Build YAML frontmatter
-    const fmLines: string[] = [];
+    const canonical: Record<string, string> = {};
     if (agent.manifest.description)
-      fmLines.push(`description: "${agent.manifest.description}"`);
-
-    // Resolve model class to opencode-specific model
+      canonical["description"] = `"${agent.manifest.description}"`;
     if (agent.manifest.defaultModelClass) {
-      const modelClass = agent.manifest.defaultModelClass;
-      const mapping = context.models.modelClasses[modelClass];
+      const mapping = context.models.modelClasses[agent.manifest.defaultModelClass];
       const opencodeModel = mapping?.["opencode"];
-      if (opencodeModel) fmLines.push(`model: ${opencodeModel}`);
+      if (opencodeModel) canonical["model"] = opencodeModel;
     }
 
-    // Apply adapter overrides
-    const overrides = agent.manifest.adapterOverrides?.["opencode"] ?? {};
-    if (overrides["color"]) fmLines.push(`color: "${overrides["color"]}"`);
-    if (overrides["mode"]) fmLines.push(`mode: ${overrides["mode"]}`);
-    if (overrides["temperature"] !== undefined)
-      fmLines.push(`temperature: ${overrides["temperature"]}`);
-
-    // Tools block
-    const tools = overrides["tools"] as Record<string, boolean> | undefined;
-    if (tools && Object.keys(tools).length > 0) {
-      fmLines.push("tools:");
-      for (const [tool, enabled] of Object.entries(tools)) {
-        fmLines.push(`  ${tool}: ${enabled}`);
-      }
-    }
+    const overrides = (agent.manifest.adapterOverrides?.["opencode"] ?? {}) as Record<string, unknown>;
+    const fmLines = buildFrontmatterLines(canonical, overrides);
 
     if (fmLines.length > 0) {
       parts.push("---");
@@ -194,12 +229,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
     }
 
     const fileName = `${agent.manifest.name}.md`;
-    return [
-      {
-        relativePath: fileName,
-        content: parts.join("\n"),
-      },
-    ];
+    return [{ relativePath: fileName, content: parts.join("\n") }];
   }
 
   async importAgents(context: AdapterContext): Promise<ImportedAgent[]> {
