@@ -10,6 +10,8 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Project root (one level up from tests/)
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const OUTPUT_DIR = path.join(PROJECT_ROOT, ".test-output");
+const CLI_ENTRY = path.join(PROJECT_ROOT, "dist", "cli", "index.js");
+const CLI_COMMAND = `node ${CLI_ENTRY}`;
 
 // --- Types ---
 
@@ -171,7 +173,7 @@ export async function createTestProject(
 
   // Sync agents so harnesses can find them (runs outside log capture)
   try {
-    execSync("agentctl sync", {
+    execSync(`${CLI_COMMAND} sync`, {
       cwd: projectDir,
       env: { ...process.env, HOME: homeDir },
       stdio: "pipe",
@@ -495,6 +497,7 @@ export function buildCommand(
   env: TestEnv
 ): string {
   return template
+    .replace(/^agentctl\b/, CLI_COMMAND)
     .replace(/\{harness\}/g, harnessId)
     .replace(/\{fixture\}/g, env.projectDir)
     .replace(/\{prompt_file\}/g, path.join(env.projectDir, "prompt.txt"));
