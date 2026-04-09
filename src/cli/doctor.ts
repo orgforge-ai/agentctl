@@ -1,8 +1,8 @@
 import * as path from "node:path";
 import { loadConfig } from "../config/index.js";
-import { loadAgents } from "../resources/agents/index.js";
+import { loadAgents, loadGlobalAgents } from "../resources/agents/index.js";
 import { getAllAdapters } from "../adapters/registry.js";
-import { loadSyncManifest, getManagedNames } from "../sync/state.js";
+import { loadSyncManifest, loadGlobalSyncManifest, getManagedNames } from "../sync/state.js";
 import { fileExists, readTextFile, contentHash } from "../util/index.js";
 import {
   detectSkillshare,
@@ -46,11 +46,22 @@ export async function runDoctor(): Promise<void> {
 
   // Check 3: agents
   const agents = await loadAgents(config.globalDir, config.projectDir);
+  const globalAgents = await loadGlobalAgents(config.globalDir);
   results.push({
     name: "Agents",
     status: agents.size > 0 ? "ok" : "warn",
     message: `${agents.size} agent(s) found`,
   });
+  for (const [name, agent] of agents) {
+    const shadowed = agent.origin === "project" && globalAgents.has(name);
+    results.push({
+      name: `  ${agent.manifest.name}`,
+      status: shadowed ? "warn" : "ok",
+      message: shadowed
+        ? `${agent.origin}  ${agent.sourcePath}  (overrides global)`
+        : `${agent.origin}  ${agent.sourcePath}`,
+    });
+  }
 
   // Check 4: model classes
   const classCount = Object.keys(config.models.modelClasses).length;
@@ -88,8 +99,15 @@ export async function runDoctor(): Promise<void> {
         results.push({
           name: `  Unmanaged (${adapter.id})`,
           status: "warn",
-          message: `${unmanaged.length} unmanaged agent(s): ${unmanaged.map((u) => u.name).join(", ")}`,
+          message: `${unmanaged.length} unmanaged agent(s)`,
         });
+        for (const u of unmanaged) {
+          results.push({
+            name: `    ${u.name}`,
+            status: "warn",
+            message: u.path,
+          });
+        }
       }
     }
   }
@@ -119,6 +137,35 @@ export async function runDoctor(): Promise<void> {
       name: "Sync drift",
       status: "ok",
       message: "All managed files in sync",
+    });
+  }
+
+  // Check 6b: global sync drift
+  const globalManifest = await loadGlobalSyncManifest();
+  let globalDriftCount = 0;
+  for (const entry of globalManifest.entries) {
+    const content = await readTextFile(entry.filePath);
+    if (content === null) {
+      globalDriftCount++;
+      results.push({
+        name: "Global sync drift",
+        status: "warn",
+        message: `Managed global file missing: ${entry.filePath}`,
+      });
+    } else if (contentHash(content) !== entry.contentHash) {
+      globalDriftCount++;
+      results.push({
+        name: "Global sync drift",
+        status: "warn",
+        message: `Managed global file modified externally: ${entry.filePath}`,
+      });
+    }
+  }
+  if (globalManifest.entries.length > 0 && globalDriftCount === 0) {
+    results.push({
+      name: "Global sync drift",
+      status: "ok",
+      message: "All global managed files in sync",
     });
   }
 

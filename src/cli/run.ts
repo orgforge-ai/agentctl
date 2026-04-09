@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { loadConfig } from "../config/index.js";
+import { loadAgents } from "../resources/agents/index.js";
 import { getAdapter, getAdapterIds } from "../adapters/registry.js";
 import { AgentctlError } from "../errors.js";
 import { fileExists } from "../util/index.js";
@@ -27,6 +28,16 @@ export async function runRun(options: RunOptions): Promise<void> {
   }
 
   const config = await loadConfig(options.cwd);
+
+  if (options.agent) {
+    const agents = await loadAgents(config.globalDir, config.projectDir);
+    if (!agents.has(options.agent)) {
+      throw new AgentctlError(
+        `Unknown agent: ${options.agent}. Available: ${Array.from(agents.keys()).join(", ") || "none"}`,
+      );
+    }
+  }
+
   const context = {
     projectRoot: config.projectRoot,
     globalDir: config.globalDir,

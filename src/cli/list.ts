@@ -2,7 +2,7 @@ import * as path from "node:path";
 import { loadConfig } from "../config/index.js";
 import { loadAgents } from "../resources/agents/index.js";
 import { getAdapter } from "../adapters/registry.js";
-import { loadSyncManifest, getManagedNames } from "../sync/state.js";
+import { loadSyncManifest, loadGlobalSyncManifest, getManagedNames } from "../sync/state.js";
 import { listSkills } from "../skillshare/index.js";
 import { AgentctlError } from "../errors.js";
 
@@ -59,13 +59,18 @@ export async function runHarnessList(
   }
 
   const config = await loadConfig();
-  const manifest = await loadSyncManifest(config.projectRoot);
+  const projectManifest = await loadSyncManifest(config.projectRoot);
+  const globalManifest = await loadGlobalSyncManifest();
+  const managedNames = new Set([
+    ...getManagedNames(projectManifest, harnessId),
+    ...getManagedNames(globalManifest, harnessId),
+  ]);
   const context = {
     projectRoot: config.projectRoot,
     globalDir: config.globalDir,
     projectDir: config.projectDir,
     models: config.models,
-    managedNames: getManagedNames(manifest, harnessId),
+    managedNames,
   };
 
   const installed = await adapter.listInstalled(context);

@@ -1,5 +1,5 @@
 import { loadConfig } from "../config/index.js";
-import { loadAgents } from "../resources/agents/index.js";
+import { loadAgents, loadGlobalAgents } from "../resources/agents/index.js";
 import { getAdapter, getAllAdapters } from "../adapters/registry.js";
 import { syncHarness } from "../sync/index.js";
 import { AgentctlError } from "../errors.js";
@@ -15,6 +15,7 @@ export async function runSync(
 ): Promise<void> {
   const config = await loadConfig();
   const agents = await loadAgents(config.globalDir, config.projectDir);
+  const globalAgents = await loadGlobalAgents(config.globalDir);
 
   if (agents.size === 0) {
     console.log("No agents found. Run agentctl init to get started.");
@@ -33,7 +34,7 @@ export async function runSync(
     if (!adapter) continue;
     console.log(`Syncing to ${adapter.displayName}...`);
 
-    const result = await syncHarness(adapter, config, agents, {
+    const result = await syncHarness(adapter, config, agents, globalAgents, {
       dryRun: options.dryRun,
       force: options.force,
     });

@@ -4,11 +4,15 @@ import type { HarnessAdapter, SyncResult } from "../adapters/base.js";
 import {
   loadSyncManifest,
   saveSyncManifest,
+  loadGlobalSyncManifest,
+  saveGlobalSyncManifest,
   getManagedNames,
   updateManifestEntry,
+  removeManifestEntry,
 } from "./state.js";
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { contentHash } from "../util/index.js";
+import { contentHash, fileExists } from "../util/index.js";
 
 export interface SyncOptions {
   dryRun: boolean;
@@ -25,10 +29,14 @@ export async function syncHarness(
   adapter: HarnessAdapter,
   config: ResolvedConfig,
   agents: Map<string, Agent>,
+  globalAgents: Map<string, Agent>,
   options: SyncOptions,
 ): Promise<FullSyncResult> {
-  const manifest = await loadSyncManifest(config.projectRoot);
-  const managedNames = getManagedNames(manifest, adapter.id);
+  const projectManifest = await loadSyncManifest(config.projectRoot);
+  const globalManifest = await loadGlobalSyncManifest();
+
+  const projectManaged = getManagedNames(projectManifest, adapter.id);
+  const globalManaged = getManagedNames(globalManifest, adapter.id);
 
   const result = await adapter.sync({
     projectRoot: config.projectRoot,
@@ -36,12 +44,13 @@ export async function syncHarness(
     projectDir: config.projectDir,
     models: config.models,
     agents,
-    managedNames,
+    globalAgents,
+    managedNames: new Set([...projectManaged, ...globalManaged]),
     dryRun: options.dryRun,
     force: options.force,
   });
 
-  // Update sync manifest for written/unchanged files
+  // Update sync manifests for written/unchanged files
   if (!options.dryRun) {
     const context = {
       projectRoot: config.projectRoot,
@@ -50,14 +59,17 @@ export async function syncHarness(
       models: config.models,
     };
 
-    // Pre-compute: render each agent once, index by target path
+    // Pre-compute: render each agent once, index by target path, track origin
     const paths = adapter.resolveInstallPaths(context);
-    const fileIndex = new Map<string, { agentName: string; content: string }>();
+    const fileIndex = new Map<string, { agentName: string; content: string; isGlobal: boolean }>();
     for (const [name, agent] of agents) {
+      const isGlobal = agent.origin === "global";
+      const targetDir = isGlobal ? paths.globalAgentsDir : paths.projectAgentsDir;
+      if (!targetDir) continue;
       const rendered = await adapter.renderAgent({ agent, context });
       for (const file of rendered) {
-        const targetPath = path.join(paths.projectAgentsDir, file.relativePath);
-        fileIndex.set(targetPath, { agentName: name, content: file.content });
+        const targetPath = path.join(targetDir, file.relativePath);
+        fileIndex.set(targetPath, { agentName: name, content: file.content, isGlobal });
       }
     }
 
@@ -72,16 +84,40 @@ export async function syncHarness(
         );
         continue;
       }
-      updateManifestEntry(manifest, {
+      const manifestEntry = {
         agentName: entry.agentName,
         harnessId: adapter.id,
         filePath: action.path,
         contentHash: contentHash(entry.content),
         syncedAt: new Date().toISOString(),
-      });
+      };
+      if (entry.isGlobal) {
+        updateManifestEntry(globalManifest, manifestEntry);
+      } else {
+        updateManifestEntry(projectManifest, manifestEntry);
+      }
     }
 
-    await saveSyncManifest(config.projectRoot, manifest);
+    // Delete stale managed files: agents removed or origin changed
+    // Build a set of target paths that the current sync wrote/skipped to.
+    // Any manifest entry pointing elsewhere is stale.
+    const liveTargetPaths = new Set(fileIndex.keys());
+
+    for (const manifest of [projectManifest, globalManifest]) {
+      const stale = manifest.entries.filter(
+        (e) => e.harnessId === adapter.id && !liveTargetPaths.has(e.filePath),
+      );
+      for (const entry of stale) {
+        if (await fileExists(entry.filePath)) {
+          await fs.unlink(entry.filePath);
+          result.actions.push({ path: entry.filePath, action: "delete", reason: "agent removed" });
+        }
+        removeManifestEntry(manifest, entry.agentName, adapter.id);
+      }
+    }
+
+    await saveSyncManifest(config.projectRoot, projectManifest);
+    await saveGlobalSyncManifest(globalManifest);
   }
 
   return { harnessId: adapter.id, result };

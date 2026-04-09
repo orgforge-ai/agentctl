@@ -40,6 +40,12 @@ async function loadAgentsFromDir(
   return agents;
 }
 
+export async function loadGlobalAgents(
+  globalDir: string,
+): Promise<Map<string, Agent>> {
+  return loadAgentsFromDir(path.join(globalDir, "agents"), "global");
+}
+
 export async function loadAgents(
   globalDir: string,
   projectDir: string,

@@ -237,6 +237,7 @@ export class ClaudeAdapter implements HarnessAdapter {
       agents: context.agents,
       context,
       projectAgentsDir: paths.projectAgentsDir,
+      globalAgentsDir: paths.globalAgentsDir,
       renderAgent: (input) => this.renderAgent(input),
     });
   }

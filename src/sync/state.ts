@@ -27,6 +27,22 @@ function manifestPath(projectRoot: string): string {
   return path.join(stateDir(), `${projectKey(projectRoot)}.json`);
 }
 
+function globalManifestPath(): string {
+  return path.join(stateDir(), "global-sync.json");
+}
+
+export async function loadGlobalSyncManifest(): Promise<SyncManifest> {
+  const existing = await readJsonFile<SyncManifest>(globalManifestPath());
+  if (existing && existing.version === 1) return existing;
+  return { version: 1, projectId: "global", entries: [] };
+}
+
+export async function saveGlobalSyncManifest(
+  manifest: SyncManifest,
+): Promise<void> {
+  await writeJsonFile(globalManifestPath(), manifest);
+}
+
 export async function loadSyncManifest(
   projectRoot: string,
 ): Promise<SyncManifest> {

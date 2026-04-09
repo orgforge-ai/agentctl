@@ -63,6 +63,7 @@ export interface ImportedAgent {
 
 export interface SyncContext extends AdapterContext {
   agents: Map<string, Agent>;
+  globalAgents: Map<string, Agent>;
   managedNames: Set<string>;
   dryRun: boolean;
   force: boolean;
