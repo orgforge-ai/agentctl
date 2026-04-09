@@ -7,6 +7,7 @@ import {
   writeJsonFile,
   writeTextFile,
   findProjectRoot,
+  getHome,
 } from "../util/index.js";
 import {
   ensureSkillshare,
@@ -14,6 +15,7 @@ import {
   detectTargets,
 } from "../skillshare/index.js";
 import type { AgentManifest } from "../resources/agents/schema.js";
+import { AgentctlError } from "../errors.js";
 
 export interface InitOptions {
   from?: string;
@@ -65,15 +67,14 @@ export async function runInit(options: InitOptions): Promise<void> {
   if (options.from) {
     const adapter = getAdapter(options.from);
     if (!adapter) {
-      console.error(`Unknown harness: ${options.from}`);
-      process.exit(1);
+      throw new AgentctlError(`Unknown harness: ${options.from}`);
     }
 
     console.log(`\nImporting agents from ${adapter.displayName}...`);
 
     const context = {
       projectRoot,
-      globalDir: path.join(process.env.HOME ?? "~", ".agentctl"),
+      globalDir: path.join(getHome(), ".agentctl"),
       projectDir: agentctlDir,
       models: DEFAULT_MODELS,
     };

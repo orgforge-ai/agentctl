@@ -11,6 +11,7 @@ import {
   globalConfigDir,
   findProjectRoot,
 } from "../util/index.js";
+import { AgentctlError } from "../errors.js";
 
 function mergeConfigs(base: Config, override: Partial<Config>): Config {
   return { ...base, ...override, version: base.version };
@@ -55,37 +56,57 @@ export async function loadConfig(
   let models = { ...DEFAULT_MODELS, modelClasses: { ...DEFAULT_MODELS.modelClasses } };
 
   // Layer 2: global config
-  const globalConfig = await readJsonFile<unknown>(
-    path.join(globalDir, "config.json"),
-  );
+  const globalConfigPath = path.join(globalDir, "config.json");
+  const globalConfig = await readJsonFile<unknown>(globalConfigPath);
   if (globalConfig) {
     const parsed = ConfigSchema.partial().safeParse(globalConfig);
-    if (parsed.success) config = mergeConfigs(config, parsed.data);
+    if (!parsed.success) {
+      const issues = parsed.error.issues
+        .map((i) => `${i.path.join(".")}: ${i.message}`)
+        .join("; ");
+      throw new AgentctlError(`Invalid config in ${globalConfigPath}: ${issues}`);
+    }
+    config = mergeConfigs(config, parsed.data);
   }
 
-  const globalModels = await readJsonFile<unknown>(
-    path.join(globalDir, "models.json"),
-  );
+  const globalModelsPath = path.join(globalDir, "models.json");
+  const globalModels = await readJsonFile<unknown>(globalModelsPath);
   if (globalModels) {
     const parsed = ModelsConfigSchema.partial().safeParse(globalModels);
-    if (parsed.success) models = mergeModels(models, parsed.data);
+    if (!parsed.success) {
+      const issues = parsed.error.issues
+        .map((i) => `${i.path.join(".")}: ${i.message}`)
+        .join("; ");
+      throw new AgentctlError(`Invalid config in ${globalModelsPath}: ${issues}`);
+    }
+    models = mergeModels(models, parsed.data);
   }
 
   // Layer 3: project config
-  const projectConfig = await readJsonFile<unknown>(
-    path.join(projectDir, "config.json"),
-  );
+  const projectConfigPath = path.join(projectDir, "config.json");
+  const projectConfig = await readJsonFile<unknown>(projectConfigPath);
   if (projectConfig) {
     const parsed = ConfigSchema.partial().safeParse(projectConfig);
-    if (parsed.success) config = mergeConfigs(config, parsed.data);
+    if (!parsed.success) {
+      const issues = parsed.error.issues
+        .map((i) => `${i.path.join(".")}: ${i.message}`)
+        .join("; ");
+      throw new AgentctlError(`Invalid config in ${projectConfigPath}: ${issues}`);
+    }
+    config = mergeConfigs(config, parsed.data);
   }
 
-  const projectModels = await readJsonFile<unknown>(
-    path.join(projectDir, "models.json"),
-  );
+  const projectModelsPath = path.join(projectDir, "models.json");
+  const projectModels = await readJsonFile<unknown>(projectModelsPath);
   if (projectModels) {
     const parsed = ModelsConfigSchema.partial().safeParse(projectModels);
-    if (parsed.success) models = mergeModels(models, parsed.data);
+    if (!parsed.success) {
+      const issues = parsed.error.issues
+        .map((i) => `${i.path.join(".")}: ${i.message}`)
+        .join("; ");
+      throw new AgentctlError(`Invalid config in ${projectModelsPath}: ${issues}`);
+    }
+    models = mergeModels(models, parsed.data);
   }
 
   return { config, models, projectRoot, globalDir, projectDir };

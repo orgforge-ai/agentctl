@@ -10,6 +10,7 @@ import {
   readSkillshareConfig,
   checkSkillsSync,
 } from "../skillshare/index.js";
+import { AgentctlError } from "../errors.js";
 
 interface CheckResult {
   name: string;
@@ -201,7 +202,9 @@ export async function runDoctor(): Promise<void> {
   console.log();
   if (errors.length > 0) {
     console.log(`${errors.length} error(s), ${warnings.length} warning(s)`);
-    process.exit(1);
+    throw new AgentctlError(
+      `${errors.length} check(s) failed`,
+    );
   } else if (warnings.length > 0) {
     console.log(`${warnings.length} warning(s)`);
   } else {

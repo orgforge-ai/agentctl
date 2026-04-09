@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { AgentManifestSchema, type Agent } from "./schema.js";
 import { fileExists, readJsonFile, readTextFile } from "../../util/index.js";
+import { AgentctlError } from "../../errors.js";
 
 async function loadAgentsFromDir(
   agentsDir: string,
@@ -20,10 +21,12 @@ async function loadAgentsFromDir(
     const raw = await readJsonFile<unknown>(manifestPath);
     const parsed = AgentManifestSchema.safeParse(raw);
     if (!parsed.success) {
-      console.error(
-        `Warning: invalid agent manifest at ${manifestPath}: ${parsed.error.message}`,
+      const issues = parsed.error.issues
+        .map((i) => `${i.path.join(".")}: ${i.message}`)
+        .join("; ");
+      throw new AgentctlError(
+        `Invalid agent manifest at ${manifestPath}: ${issues}`,
       );
-      continue;
     }
 
     agents.set(parsed.data.name, {

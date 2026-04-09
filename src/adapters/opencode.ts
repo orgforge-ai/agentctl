@@ -16,11 +16,11 @@ import {
   type ImportedAgent,
   type SyncContext,
   type SyncResult,
-  type SyncFileAction,
   type RunCommandInput,
   type CommandSpec,
 } from "./base.js";
-import { fileExists, readTextFile } from "../util/index.js";
+import { fileExists, readTextFile, getHome } from "../util/index.js";
+import { syncAgents } from "./sync-utils.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -79,7 +79,7 @@ function stripFrontmatter(content: string): string {
 
 function globalConfigDir(): string {
   return path.join(
-    process.env.XDG_CONFIG_HOME ?? path.join(process.env.HOME ?? "~", ".config"),
+    process.env.XDG_CONFIG_HOME ?? path.join(getHome(), ".config"),
     "opencode",
   );
 }
@@ -236,72 +236,24 @@ export class OpenCodeAdapter implements HarnessAdapter {
 
   async sync(context: SyncContext): Promise<SyncResult> {
     const paths = this.resolveInstallPaths(context);
-    const actions: SyncFileAction[] = [];
-    const warnings: string[] = [];
-
-    for (const [name, agent] of context.agents) {
-      const rendered = await this.renderAgent({ agent, context });
-      for (const file of rendered) {
-        const targetPath = path.join(paths.projectAgentsDir, file.relativePath);
-        const existing = await readTextFile(targetPath);
-
-        if (existing !== null && !context.managedNames.has(name)) {
-          if (!context.force) {
-            warnings.push(
-              `Conflict: "${name}" exists in ${paths.projectAgentsDir} but is not managed by agentctl. Use --force to overwrite.`,
-            );
-            actions.push({
-              path: targetPath,
-              action: "skip",
-              reason: "unmanaged conflict",
-            });
-            continue;
-          }
-        }
-
-        if (existing === file.content) {
-          actions.push({ path: targetPath, action: "skip", reason: "unchanged" });
-          continue;
-        }
-
-        if (!context.dryRun) {
-          await fs.mkdir(path.dirname(targetPath), { recursive: true });
-          await fs.writeFile(targetPath, file.content, "utf-8");
-        }
-
-        actions.push({ path: targetPath, action: "write" });
-      }
-    }
-
-    if (await fileExists(paths.projectAgentsDir)) {
-      const entries = await fs.readdir(paths.projectAgentsDir, {
-        withFileTypes: true,
-      });
-      for (const entry of entries) {
-        if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-        const name = entry.name.replace(/\.md$/, "");
-        if (!context.agents.has(name)) {
-          warnings.push(
-            `Unmanaged agent "${name}" found in ${paths.projectAgentsDir}`,
-          );
-        }
-      }
-    }
-
-    return { actions, warnings };
+    return syncAgents({
+      agents: context.agents,
+      context,
+      projectAgentsDir: paths.projectAgentsDir,
+      renderAgent: (input) => this.renderAgent(input),
+    });
   }
 
   async buildRunCommand(input: RunCommandInput): Promise<CommandSpec> {
     const args: string[] = [];
+    let promptFile: string | undefined;
 
     if (input.headless) {
       args.push("run");
       if (input.prompt) {
         args.push(input.prompt);
       } else if (input.promptFile) {
-        const content = await readTextFile(input.promptFile);
-        if (!content) throw new Error(`Cannot read prompt file: ${input.promptFile}`);
-        args.push(content);
+        promptFile = input.promptFile;
       } else {
         throw new Error("Headless mode requires --prompt or --prompt-file");
       }
@@ -328,6 +280,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
       args,
       env: input.env,
       cwd: input.cwd ?? input.context.projectRoot,
+      promptFile,
     };
   }
 }

@@ -4,6 +4,7 @@ import { loadAgents } from "../resources/agents/index.js";
 import { getAdapter } from "../adapters/registry.js";
 import { loadSyncManifest, getManagedNames } from "../sync/state.js";
 import { listSkills } from "../skillshare/index.js";
+import { AgentctlError } from "../errors.js";
 
 export async function runList(
   resourceKind: string,
@@ -15,9 +16,9 @@ export async function runList(
   }
 
   if (resourceKind !== "agents") {
-    console.error(`Unknown resource kind: ${resourceKind}`);
-    console.error("Available: agents, skills");
-    process.exit(1);
+    throw new AgentctlError(
+      `Unknown resource kind: ${resourceKind}. Available: agents, skills`,
+    );
   }
 
   const config = await loadConfig();
@@ -47,15 +48,14 @@ export async function runHarnessList(
   resourceKind: string,
 ): Promise<void> {
   if (resourceKind !== "agents") {
-    console.error(`Unknown resource kind: ${resourceKind}`);
-    console.error("Available: agents");
-    process.exit(1);
+    throw new AgentctlError(
+      `Unknown resource kind: ${resourceKind}. Available: agents`,
+    );
   }
 
   const adapter = getAdapter(harnessId);
   if (!adapter) {
-    console.error(`Unknown harness: ${harnessId}`);
-    process.exit(1);
+    throw new AgentctlError(`Unknown harness: ${harnessId}`);
   }
 
   const config = await loadConfig();

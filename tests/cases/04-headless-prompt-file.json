@@ -1,18 +1,18 @@
 {
   "name": "headless-prompt-file",
-  "description": "Headless with --prompt-file reads file content and passes it inline",
+  "description": "Headless with --prompt-file passes file via stdin instead of inline content",
   "command": "agentctl run -h {harness} --headless --prompt-file {prompt_file}",
   "tags": ["api", "slow"],
   "expected": {
     "claude": {
-      "dryRun": "claude -p respond with exactly: FILE_TEST_OK",
+      "dryRun": "/claude -p - < .*prompt\\.txt/",
       "steps": [
         { "wait": "/^FILE_TEST_OK$/m", "timeoutMs": 30000 }
       ],
       "exitCode": 0
     },
     "opencode": {
-      "dryRun": "opencode run respond with exactly: FILE_TEST_OK",
+      "dryRun": "/opencode run < .*prompt\\.txt/",
       "steps": [
         { "wait": "/^FILE_TEST_OK$/m", "timeoutMs": 30000 }
       ],

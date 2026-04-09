@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { homedir } from "node:os";
+import { AgentctlError } from "../errors.js";
 
 export async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -15,8 +17,11 @@ export async function readJsonFile<T>(filePath: string): Promise<T | null> {
   try {
     const content = await fs.readFile(filePath, "utf-8");
     return JSON.parse(content) as T;
-  } catch {
-    return null;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new AgentctlError(
+      `Failed to read ${filePath}: ${(err as Error).message}`,
+    );
   }
 }
 
@@ -65,8 +70,18 @@ export async function findProjectRoot(
   }
 }
 
+export function getHome(): string {
+  const home = process.env.HOME ?? homedir();
+  if (!home) {
+    throw new AgentctlError(
+      "Cannot determine home directory. Set the HOME environment variable.",
+    );
+  }
+  return home;
+}
+
 export function globalConfigDir(): string {
-  return path.join(process.env.HOME ?? "~", ".agentctl");
+  return path.join(getHome(), ".agentctl");
 }
 
 export function indent(text: string, spaces: number): string {

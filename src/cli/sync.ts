@@ -2,11 +2,11 @@ import { loadConfig } from "../config/index.js";
 import { loadAgents } from "../resources/agents/index.js";
 import { getAdapter, getAllAdapters } from "../adapters/registry.js";
 import { syncHarness } from "../sync/index.js";
+import { AgentctlError } from "../errors.js";
 
 export interface SyncCommandOptions {
   dryRun: boolean;
   force: boolean;
-  projectOnly: boolean;
 }
 
 export async function runSync(
@@ -26,8 +26,7 @@ export async function runSync(
     : getAllAdapters();
 
   if (harnessId && adapters.length === 0) {
-    console.error(`Unknown harness: ${harnessId}`);
-    process.exit(1);
+    throw new AgentctlError(`Unknown harness: ${harnessId}`);
   }
 
   for (const adapter of adapters) {

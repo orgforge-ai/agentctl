@@ -1,0 +1,80 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import type {
+  Agent,
+} from "../resources/agents/schema.js";
+import type {
+  SyncContext,
+  SyncResult,
+  SyncFileAction,
+  RenderedFile,
+} from "./base.js";
+import { fileExists, readTextFile } from "../util/index.js";
+
+export interface RenderAgentInput {
+  agent: Agent;
+  context: SyncContext;
+}
+
+export interface SyncAgentsOptions {
+  agents: Map<string, Agent>;
+  context: SyncContext;
+  projectAgentsDir: string;
+  renderAgent: (input: RenderAgentInput) => Promise<RenderedFile[]>;
+}
+
+export async function syncAgents(options: SyncAgentsOptions): Promise<SyncResult> {
+  const { agents, context, projectAgentsDir, renderAgent } = options;
+  const actions: SyncFileAction[] = [];
+  const warnings: string[] = [];
+
+  for (const [name, agent] of agents) {
+    const rendered = await renderAgent({ agent, context });
+    for (const file of rendered) {
+      const targetPath = path.join(projectAgentsDir, file.relativePath);
+      const existing = await readTextFile(targetPath);
+
+      if (existing !== null && !context.managedNames.has(name)) {
+        if (!context.force) {
+          warnings.push(
+            `Conflict: "${name}" exists in ${projectAgentsDir} but is not managed by agentctl. Use --force to overwrite.`,
+          );
+          actions.push({
+            path: targetPath,
+            action: "skip",
+            reason: "unmanaged conflict",
+          });
+          continue;
+        }
+      }
+
+      if (existing === file.content) {
+        actions.push({ path: targetPath, action: "skip", reason: "unchanged" });
+        continue;
+      }
+
+      if (!context.dryRun) {
+        await fs.mkdir(path.dirname(targetPath), { recursive: true });
+        await fs.writeFile(targetPath, file.content, "utf-8");
+      }
+
+      actions.push({ path: targetPath, action: "write" });
+    }
+  }
+
+  // Detect unmanaged agents in harness directory
+  if (await fileExists(projectAgentsDir)) {
+    const entries = await fs.readdir(projectAgentsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
+      const name = entry.name.replace(/\.md$/, "");
+      if (!agents.has(name)) {
+        warnings.push(
+          `Unmanaged agent "${name}" found in ${projectAgentsDir}`,
+        );
+      }
+    }
+  }
+
+  return { actions, warnings };
+}

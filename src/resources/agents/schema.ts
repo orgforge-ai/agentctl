@@ -2,7 +2,10 @@ import { z } from "zod";
 
 export const AgentManifestSchema = z.object({
   version: z.number().default(1),
-  name: z.string(),
+  name: z.string().regex(
+    /^[a-zA-Z0-9_-]+$/,
+    "Agent name must contain only alphanumeric characters, hyphens, and underscores",
+  ),
   description: z.string().optional(),
   defaultModelClass: z.string().optional(),
   capabilities: z.array(z.string()).optional(),

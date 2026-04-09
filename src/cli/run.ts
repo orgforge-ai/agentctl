@@ -1,6 +1,9 @@
 import { spawn } from "node:child_process";
+import { createReadStream } from "node:fs";
 import { loadConfig } from "../config/index.js";
 import { getAdapter, getAdapterIds } from "../adapters/registry.js";
+import { AgentctlError } from "../errors.js";
+import { fileExists } from "../util/index.js";
 
 export interface RunOptions {
   harness: string;
@@ -18,9 +21,9 @@ export interface RunOptions {
 export async function runRun(options: RunOptions): Promise<void> {
   const adapter = getAdapter(options.harness);
   if (!adapter) {
-    console.error(`Unknown harness: ${options.harness}`);
-    console.error(`Available: ${getAdapterIds().join(", ")}`);
-    process.exit(1);
+    throw new AgentctlError(
+      `Unknown harness: ${options.harness}. Available: ${getAdapterIds().join(", ")}`,
+    );
   }
 
   const config = await loadConfig(options.cwd);
@@ -37,8 +40,7 @@ export async function runRun(options: RunOptions): Promise<void> {
     for (const e of options.env) {
       const eqIdx = e.indexOf("=");
       if (eqIdx === -1) {
-        console.error(`Invalid --env format: ${e} (expected KEY=VALUE)`);
-        process.exit(1);
+        throw new AgentctlError(`Invalid --env format: ${e} (expected KEY=VALUE)`);
       }
       envVars[e.slice(0, eqIdx)] = e.slice(eqIdx + 1);
     }
@@ -48,11 +50,9 @@ export async function runRun(options: RunOptions): Promise<void> {
   const caps = adapter.capabilities();
   if (options.headless && !caps.headlessRun) {
     if (!options.degradedOk) {
-      console.error(
-        `${adapter.displayName} does not support headless execution.`,
+      throw new AgentctlError(
+        `${adapter.displayName} does not support headless execution. Use --degraded-ok to attempt a fallback.`,
       );
-      console.error("Use --degraded-ok to attempt a fallback.");
-      process.exit(1);
     }
     console.log(
       `Warning: ${adapter.displayName} does not fully support headless mode. Attempting degraded execution.`,
@@ -61,10 +61,9 @@ export async function runRun(options: RunOptions): Promise<void> {
 
   if (options.agent && !caps.customAgents) {
     if (!options.degradedOk) {
-      console.error(
+      throw new AgentctlError(
         `${adapter.displayName} does not support custom agents.`,
       );
-      process.exit(1);
     }
     console.log(
       `Warning: ${adapter.displayName} does not support custom agents. Agent selection will be ignored.`,
@@ -90,23 +89,33 @@ export async function runRun(options: RunOptions): Promise<void> {
             .map(([k, v]) => `${k}=${v}`)
             .join(" ") + " "
         : "";
-      console.log(`${envStr}${spec.command} ${spec.args.join(" ")}`);
+      const stdinStr = spec.promptFile ? ` < ${spec.promptFile}` : "";
+      console.log(`${envStr}${spec.command} ${spec.args.join(" ")}${stdinStr}`);
       return;
     }
 
+    if (spec.promptFile && !(await fileExists(spec.promptFile))) {
+      throw new AgentctlError(`Cannot read prompt file: ${spec.promptFile}`);
+    }
+
     const child = spawn(spec.command, spec.args, {
-      stdio: "inherit",
+      stdio: spec.promptFile ? ["pipe", "inherit", "inherit"] : "inherit",
       env: { ...process.env, ...spec.env },
       cwd: spec.cwd,
     });
+
+    if (spec.promptFile) {
+      const stream = createReadStream(spec.promptFile);
+      stream.pipe(child.stdin!);
+    }
 
     child.on("close", (code) => {
       process.exit(code ?? 0);
     });
   } catch (err) {
-    console.error(
-      `Error: ${err instanceof Error ? err.message : String(err)}`,
+    if (err instanceof AgentctlError) throw err;
+    throw new AgentctlError(
+      err instanceof Error ? err.message : String(err),
     );
-    process.exit(1);
   }
 }

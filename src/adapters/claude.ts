@@ -16,11 +16,11 @@ import {
   type ImportedAgent,
   type SyncContext,
   type SyncResult,
-  type SyncFileAction,
   type RunCommandInput,
   type CommandSpec,
 } from "./base.js";
-import { fileExists, readTextFile, contentHash } from "../util/index.js";
+import { fileExists, readTextFile, contentHash, getHome } from "../util/index.js";
+import { syncAgents } from "./sync-utils.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -79,11 +79,7 @@ export class ClaudeAdapter implements HarnessAdapter {
   resolveInstallPaths(context: AdapterContext): HarnessPaths {
     return {
       projectAgentsDir: path.join(context.projectRoot, ".claude", "agents"),
-      globalAgentsDir: path.join(
-        process.env.HOME ?? "~",
-        ".claude",
-        "agents",
-      ),
+      globalAgentsDir: path.join(getHome(), ".claude", "agents"),
     };
   }
 
@@ -195,73 +191,24 @@ export class ClaudeAdapter implements HarnessAdapter {
 
   async sync(context: SyncContext): Promise<SyncResult> {
     const paths = this.resolveInstallPaths(context);
-    const actions: SyncFileAction[] = [];
-    const warnings: string[] = [];
-
-    // Render and write each managed agent
-    for (const [name, agent] of context.agents) {
-      const rendered = await this.renderAgent({ agent, context });
-      for (const file of rendered) {
-        const targetPath = path.join(paths.projectAgentsDir, file.relativePath);
-        const existing = await readTextFile(targetPath);
-
-        if (existing !== null && !context.managedNames.has(name)) {
-          if (!context.force) {
-            warnings.push(
-              `Conflict: "${name}" exists in ${paths.projectAgentsDir} but is not managed by agentctl. Use --force to overwrite.`,
-            );
-            actions.push({
-              path: targetPath,
-              action: "skip",
-              reason: "unmanaged conflict",
-            });
-            continue;
-          }
-        }
-
-        if (existing === file.content) {
-          actions.push({ path: targetPath, action: "skip", reason: "unchanged" });
-          continue;
-        }
-
-        if (!context.dryRun) {
-          await fs.mkdir(path.dirname(targetPath), { recursive: true });
-          await fs.writeFile(targetPath, file.content, "utf-8");
-        }
-
-        actions.push({ path: targetPath, action: "write" });
-      }
-    }
-
-    // Detect unmanaged agents in harness directory
-    if (await fileExists(paths.projectAgentsDir)) {
-      const entries = await fs.readdir(paths.projectAgentsDir, {
-        withFileTypes: true,
-      });
-      for (const entry of entries) {
-        if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-        const name = entry.name.replace(/\.md$/, "");
-        if (!context.agents.has(name)) {
-          warnings.push(
-            `Unmanaged agent "${name}" found in ${paths.projectAgentsDir}`,
-          );
-        }
-      }
-    }
-
-    return { actions, warnings };
+    return syncAgents({
+      agents: context.agents,
+      context,
+      projectAgentsDir: paths.projectAgentsDir,
+      renderAgent: (input) => this.renderAgent(input),
+    });
   }
 
   async buildRunCommand(input: RunCommandInput): Promise<CommandSpec> {
     const args: string[] = [];
+    let promptFile: string | undefined;
 
     if (input.headless) {
       if (input.prompt) {
         args.push("-p", input.prompt);
       } else if (input.promptFile) {
-        const content = await readTextFile(input.promptFile);
-        if (!content) throw new Error(`Cannot read prompt file: ${input.promptFile}`);
-        args.push("-p", content);
+        args.push("-p", "-");
+        promptFile = input.promptFile;
       } else {
         throw new Error("Headless mode requires --prompt or --prompt-file");
       }
@@ -292,6 +239,7 @@ export class ClaudeAdapter implements HarnessAdapter {
       args,
       env: input.env,
       cwd: input.cwd,
+      promptFile,
     };
   }
 }

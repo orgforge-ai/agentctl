@@ -6,8 +6,11 @@ import { runSync } from "./sync.js";
 import { runList, runHarnessList } from "./list.js";
 import { runRun } from "./run.js";
 import { runDoctor } from "./doctor.js";
+import { AgentctlError } from "../errors.js";
 
 const program = new Command();
+
+program.exitOverride();
 
 program
   .name("agentctl")
@@ -28,12 +31,10 @@ program
   .description("Generate harness-native artifacts from canonical config")
   .option("--dry-run", "Show what would change without writing", false)
   .option("--force", "Overwrite conflicting unmanaged agents", false)
-  .option("--project-only", "Only sync project-level agents", false)
   .action(async (harness, options) => {
     await runSync(harness, {
       dryRun: options.dryRun,
       force: options.force,
-      projectOnly: options.projectOnly,
     });
   });
 
@@ -94,4 +95,17 @@ program
     await runDoctor();
   });
 
-program.parse();
+program.parseAsync().catch((err) => {
+  if (err instanceof AgentctlError) {
+    console.error(`Error: ${err.message}`);
+    process.exit(err.exitCode);
+  }
+  // Commander error (bad args, unknown options, etc.)
+  if (err?.code?.startsWith?.("commander.")) {
+    console.error(err.message);
+    process.exit(1);
+  }
+  // Unexpected — print full trace
+  console.error(err);
+  process.exit(1);
+});

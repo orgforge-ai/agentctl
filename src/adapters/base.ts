@@ -96,6 +96,7 @@ export interface CommandSpec {
   args: string[];
   env?: Record<string, string>;
   cwd?: string;
+  promptFile?: string;
 }
 
 export interface HarnessAdapter {
