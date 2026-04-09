@@ -8,7 +8,10 @@
   },
   "scripts": {
     "build": "tsc",
+    "bundle": "esbuild src/cli/index.ts --bundle --platform=node --target=node20 --format=cjs --outfile=build/lib/agentctl.cjs",
     "dev": "tsc --watch",
+    "release:build": "bash scripts/build-release.sh",
+    "release:smoke": "bash scripts/release-smoke-test.sh",
     "start": "node dist/cli/index.js",
     "test": "tsx --test tests/runner.ts",
     "test:fast": "EXCLUDE_TAGS=api,slow tsx --test tests/runner.ts",
@@ -24,6 +27,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "esbuild": "^0.25.3",
     "strip-ansi": "^7.2.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"
