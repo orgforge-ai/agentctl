@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+VERSION="$(node -e "console.log(JSON.parse(require('node:fs').readFileSync('package.json','utf8')).version)")"
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-$ROOT_DIR/artifacts}"
 TEST_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
@@ -26,7 +27,10 @@ bash scripts/build-release.sh
 
 mkdir -p "$TEST_ROOT/install-root"
 tar -xzf "$ARTIFACTS_DIR/agentctl-linux.tar.gz" -C "$TEST_ROOT"
-cp -R "$TEST_ROOT/agentctl-linux/." "$TEST_ROOT/install-root/"
+mkdir -p "$TEST_ROOT/install-root/share/agentctl/$VERSION" "$TEST_ROOT/install-root/bin"
+cp -R "$TEST_ROOT/agentctl-linux/." "$TEST_ROOT/install-root/share/agentctl/$VERSION/"
+ln -s "$TEST_ROOT/install-root/share/agentctl/$VERSION/bin/agentctl" \
+  "$TEST_ROOT/install-root/bin/agentctl"
 mkdir -p "$SMOKE_HOME" "$SMOKE_PROJECT"
 
 run_smoke_check version \
