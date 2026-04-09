@@ -100,6 +100,12 @@ program.parseAsync().catch((err) => {
     console.error(`Error: ${err.message}`);
     process.exit(err.exitCode);
   }
+  if (err?.code === "commander.help" || err?.code === "commander.helpDisplayed") {
+    process.exit(0);
+  }
+  if (err?.code === "commander.version" || err?.code === "commander.versionDisplayed") {
+    process.exit(0);
+  }
   // Commander error (bad args, unknown options, etc.)
   if (err?.code?.startsWith?.("commander.")) {
     console.error(err.message);
