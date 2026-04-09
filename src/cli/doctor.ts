@@ -4,6 +4,12 @@ import { loadAgents } from "../resources/agents/index.js";
 import { getAllAdapters } from "../adapters/registry.js";
 import { loadSyncManifest, getManagedNames } from "../sync/state.js";
 import { fileExists, readTextFile, contentHash } from "../util/index.js";
+import {
+  detectSkillshare,
+  listSkills,
+  readSkillshareConfig,
+  checkSkillsSync,
+} from "../skillshare/index.js";
 
 interface CheckResult {
   name: string;
@@ -113,6 +119,70 @@ export async function runDoctor(): Promise<void> {
       status: "ok",
       message: "All managed files in sync",
     });
+  }
+
+  // Check 7: skillshare integration
+  const skillsDir = path.join(config.projectDir, "skills");
+  const skills = await listSkills(skillsDir);
+
+  if (skills.length > 0) {
+    results.push({
+      name: "Skills source",
+      status: "ok",
+      message: `${skillsDir} (${skills.length} skill(s) found)`,
+    });
+
+    // Check skillshare binary
+    const ssDetection = await detectSkillshare();
+    results.push({
+      name: "Skillshare",
+      status: ssDetection.installed ? "ok" : "warn",
+      message: ssDetection.installed
+        ? `Installed${ssDetection.version ? ` (${ssDetection.version})` : ""}`
+        : "Not found — install skillshare to distribute skills",
+    });
+
+    // Check .skillshare/config.yaml
+    const ssConfig = await readSkillshareConfig(config.projectRoot);
+    if (ssConfig.exists) {
+      const pointsToAgentctl =
+        ssConfig.source === ".agentctl/skills" ||
+        ssConfig.source === ".agentctl/skills/";
+      results.push({
+        name: ".skillshare/config",
+        status: pointsToAgentctl ? "ok" : "warn",
+        message: pointsToAgentctl
+          ? `source → .agentctl/skills`
+          : `source → ${ssConfig.source} (expected .agentctl/skills)`,
+      });
+    } else {
+      results.push({
+        name: ".skillshare/config",
+        status: "warn",
+        message:
+          "Not found — run agentctl init --with-skillshare or skillshare init",
+      });
+    }
+
+    // Check sync status
+    if (ssDetection.installed && ssConfig.exists) {
+      const targets: string[] = [];
+      if (await fileExists(path.join(config.projectRoot, ".claude")))
+        targets.push("claude");
+      if (await fileExists(path.join(config.projectRoot, ".opencode")))
+        targets.push("opencode");
+
+      if (targets.length > 0) {
+        const syncCheck = await checkSkillsSync(config.projectRoot, targets);
+        results.push({
+          name: "Skillshare sync",
+          status: syncCheck.synced ? "ok" : "warn",
+          message: syncCheck.synced
+            ? syncCheck.details
+            : `${syncCheck.details} — run \`skillshare sync\``,
+        });
+      }
+    }
   }
 
   // Print results

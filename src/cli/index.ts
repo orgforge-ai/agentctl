@@ -18,8 +18,9 @@ program
   .command("init")
   .description("Create .agentctl/ with starter config")
   .option("--from <harness>", "Import agents from an existing harness")
+  .option("--with-skillshare", "Set up skillshare integration for skill distribution")
   .action(async (options) => {
-    await runInit({ from: options.from });
+    await runInit({ from: options.from, withSkillshare: options.withSkillshare });
   });
 
 program
@@ -38,7 +39,7 @@ program
 
 program
   .command("list <resource>")
-  .description("List canonical resources")
+  .description("List canonical resources (agents, skills)")
   .option("--global", "Show only global resources", false)
   .action(async (resource, options) => {
     await runList(resource, { global: options.global });

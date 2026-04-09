@@ -2,30 +2,15 @@
 
 This document covers features deferred from the current implementation in `DESIGN.md`.
 
-## Stage 2: Advanced Skill Support
+## Stage 2: Skillshare Integration (Done)
 
-Basic skill resources now exist in the portable model. The next layer of work is not “whether skills exist,” but how deeply agentctl should model harness-specific skill behavior.
+See [SKILLSHARE.md](./SKILLSHARE.md) for the full design. Implemented in `src/skillshare/index.ts`:
 
-### Open Questions
-
-- should adapters expose explicit skill capability levels such as `native`, `emulated`, or `unsupported`
-- should agentctl model per-harness skill permissions and allow/ask/deny states
-- should skill activation be purely directory-based, or should `agentctl run` eventually support explicit skill selection
-- should skill import from existing harness directories be supported the same way agent import is supported today
-
-### Possible Directions
-
-1. **Capability modeling**
-   Extend adapter capabilities with a dedicated skill support field.
-
-2. **Permission modeling**
-   Add optional per-adapter settings for harnesses that support skill enable/disable controls.
-
-3. **Explicit activation**
-   Add `run --skill <name>` only if multiple harnesses can support equivalent behavior cleanly.
-
-4. **Skill import**
-   Support importing existing skill directories from harness-native locations into `.agentctl/skills/`.
+- `agentctl init --with-skillshare` — detects/downloads skillshare, creates `.skillshare/config.yaml` with `source: .agentctl/skills`, auto-detects targets
+- Skillshare binary management — downloads pinned version to `~/.agentctl/bin/skillshare` if not on PATH, prefers system install
+- `agentctl doctor` skillshare checks — verifies skillshare is installed, `.skillshare/config.yaml` exists and points at `.agentctl/skills/`, warns if skills exist but aren't synced
+- `agentctl list skills` — reads `.agentctl/skills/` directories and lists names from SKILL.md frontmatter
+- `agentctl init` now creates `skills/` directory alongside `agents/`
 
 ## Stage 3: Plugins
 
@@ -54,7 +39,7 @@ type HarnessCapabilities = {
 
 ### Rationale for Deferral
 
-Memory is fundamentally different from agents and skills:
+Memory is fundamentally different from agents:
 
 - **Definitions are static and declarative.**
 - **Memory is dynamic and temporal.**
@@ -91,7 +76,6 @@ Current import support is `agentctl init --from claude` for agents only.
 Future import work includes:
 
 - agent import from additional harnesses
-- skill import from harness-native `skills/` directories
 - mapping harness-specific metadata into portable manifests
 - deciding what to do with harness-native fields that have no portable equivalent
 
@@ -99,13 +83,12 @@ Future import work includes:
 
 ### Concept
 
-A registry for sharing portable agents and skills across teams or publicly.
+A registry for sharing portable agents across teams or publicly.
 
 ```bash
 agentctl registry search "code reviewer"
 agentctl registry install @org/reviewer
 agentctl registry publish ./agents/reviewer
-agentctl registry publish ./skills/postgres-migrate
 ```
 
 ### Prerequisites
@@ -120,6 +103,7 @@ agentctl registry publish ./skills/postgres-migrate
 - is this a package registry or a catalog
 - should published resources include model mappings or leave those to the consumer
 - how are updates handled
+- should skill publishing go through skillshare's hub system instead
 
 ## Stage 7: Background Daemons
 

@@ -6,11 +6,13 @@
 
 It provides:
 
-- one cross-platform source of truth for agent definitions, skill directories, and model mappings
+- one cross-platform source of truth for agent definitions and model mappings
 - one normalized CLI for interactive and headless execution
 - adapter-based synchronization into harness-specific config layouts
 - provider-agnostic model aliases such as `small`, `medium`, and `large`
 - an extension model that makes adding new harnesses cheap
+
+Skill distribution is handled by [skillshare](./SKILLSHARE.md), which reads from `.agentctl/skills/` and syncs to all target harnesses. agentctl focuses on agents and run orchestration.
 
 It does not try to pretend all harnesses are identical. Where capabilities differ, `agentctl` should expose a stable abstraction and surface capability gaps clearly.
 
@@ -21,6 +23,7 @@ It does not try to pretend all harnesses are identical. Where capabilities diffe
 - hiding every provider-specific detail
 - managing arbitrary non-coding agent runtimes from day one
 - managing runtime state such as session history, memory, or task logs
+- skill distribution and synchronization (delegated to [skillshare](./SKILLSHARE.md))
 
 ## Core Idea
 
@@ -45,11 +48,11 @@ Runtime state such as session history, harness memory, task logs, and harness se
 ## Primary Use Cases
 
 1. Define portable agents once and sync them into multiple harnesses.
-2. Define portable skills once and sync them into multiple harnesses.
-3. Launch a harness interactively through one consistent CLI.
-4. Launch a harness headlessly through one consistent CLI.
-5. List what agents and skills are available from canonical config and from installed harness locations.
-6. Add support for a new harness without rewriting the whole system.
+2. Launch a harness interactively through one consistent CLI.
+3. Launch a harness headlessly through one consistent CLI.
+4. List what agents are available from canonical config and from installed harness locations.
+5. Add support for a new harness without rewriting the whole system.
+6. Optionally integrate with skillshare for skill distribution (see [SKILLSHARE.md](./SKILLSHARE.md)).
 
 ## Directory Model
 
@@ -71,15 +74,15 @@ Project:
   config.json
   models.json
   agents/
-  skills/
+  skills/              ← skillshare reads from here (see SKILLSHARE.md)
 ```
 
 Generated harness artifacts:
 
 ```text
 <repo>/.claude/
-  agents/
-  skills/
+  agents/              ← agentctl sync writes here
+  skills/              ← skillshare sync writes here
 
 <repo>/.opencode/
   agents/
@@ -90,13 +93,13 @@ Notes:
 
 - project config overrides global config
 - project agents shadow global agents by name
-- project skills shadow global skills by name
 - generated harness directories should be safe to recreate
 - `~/.agentctl/state/` tracks sync metadata and is never committed
+- skill directories are managed by skillshare, not agentctl
 
 ## Resource Model
 
-v1 has two portable resource kinds: **agents** and **skills**.
+v1 has one portable resource kind: **agents**. Skills are stored in `.agentctl/skills/` using standard SKILL.md format and distributed by [skillshare](./SKILLSHARE.md).
 
 ### Agents
 
@@ -123,24 +126,7 @@ Example fields:
 
 ### Skills
 
-Portable unit describing a reusable task capability.
-
-```text
-.agentctl/skills/<name>/
-  skill.json
-  SKILL.md
-  scripts/
-  references/
-  assets/
-```
-
-`skill.json` holds portable metadata. `SKILL.md` is the standard skill entrypoint. Optional bundled directories are copied through to the harness.
-
-Example fields:
-
-- `name`
-- `description`
-- `adapterOverrides`
+Skills live in `.agentctl/skills/` as directories containing `SKILL.md` with YAML frontmatter. agentctl creates this directory but does not sync skills to harness directories — that is skillshare's job. See [SKILLSHARE.md](./SKILLSHARE.md) for the full integration design.
 
 ## Configuration Layers
 
@@ -213,7 +199,6 @@ export interface HarnessAdapter {
   listInstalled(context: AdapterContext): Promise<InstalledResources>;
   listUnmanaged(context: AdapterContext): Promise<UnmanagedResource[]>;
   renderAgent(input: RenderAgentInput): Promise<RenderedFile[]>;
-  renderSkill(input: RenderSkillInput): Promise<RenderedFile[]>;
   importAgents(context: AdapterContext): Promise<ImportedAgent[]>;
   sync(context: SyncContext): Promise<SyncResult>;
   buildRunCommand(input: RunCommandInput): Promise<CommandSpec>;
@@ -222,9 +207,8 @@ export interface HarnessAdapter {
 
 ### Adapter Responsibilities
 
-- know where that harness installs agents and skills
+- know where that harness installs agents
 - know how to translate portable agents into harness-native files
-- know how to materialize skills into the harness skill directory
 - declare supported capabilities
 - know how to build interactive and headless commands
 - report unsupported actions clearly
@@ -242,7 +226,7 @@ type HarnessCapabilities = {
 };
 ```
 
-Skills are currently treated as standard directory resources during sync. More advanced per-harness skill capability modeling can be added later if needed.
+Skills are managed by skillshare, not by adapter sync. See [SKILLSHARE.md](./SKILLSHARE.md).
 
 ## Sync Model
 
@@ -262,25 +246,24 @@ Behavior:
 - read merged `.agentctl` state
 - compute desired harness-native artifacts
 - render agents into harness-native files
-- copy skills as directory trees into harness-native skill locations
 - write changes
-- warn about unmanaged agents or skills found in harness directories
+- warn about unmanaged agents found in harness directories
 
 ### Ownership Rules
 
 After creation or import, agentctl owns the resources it manages. On sync:
 
 - managed agents are overwritten in the harness directory
-- managed skills are overwritten in the harness directory
-- unmanaged resources trigger warnings, not deletion
+- unmanaged agents trigger warnings, not deletion
 - name collisions with unmanaged harness resources require `--force`
+- skill directories are not touched (managed by skillshare)
 
 ### Sync State
 
 Sync state is stored in `~/.agentctl/state/` and tracks:
 
 - which files were written to which harness directories
-- whether each file belongs to an agent or a skill
+- whether each file belongs to an agent
 - content hashes of managed files
 - project identity keyed from the project root
 
@@ -292,6 +275,7 @@ This directory is machine-local and should never be committed.
 - `CLAUDE.md` and equivalent harness-specific system prompt files
 - harness settings files such as `.claude/settings.json`
 - credentials and trust metadata
+- skill directories (managed by skillshare)
 
 ## Run Model
 
@@ -318,14 +302,18 @@ Normalized flags:
 - `--dry-run`
 - `--degraded-ok`
 
-Current run support is agent-oriented. Skill activation is handled by syncing skills into harness lookup directories rather than by a separate `run --skill` flag.
+Current run support is agent-oriented. Skills are available to the harness via skillshare sync but are not activated or selected by agentctl.
 
 ## Listing Model
 
 There are two list operations:
 
 1. `agentctl list <resource>`
-   Lists canonical resources from `.agentctl`.
+    Lists canonical resources from `.agentctl`.
+
+    Supported resource kinds: `agents`.
+
+    Skills can be listed via `skillshare list`.
 
 2. `agentctl harness list <harness> <resource>`
    Lists resources installed in the harness-native location.
@@ -334,10 +322,8 @@ Examples:
 
 ```bash
 agentctl list agents
-agentctl list skills
-agentctl list skills --global
 agentctl harness list claude agents
-agentctl harness list opencode skills
+agentctl harness list opencode agents
 ```
 
 ## Local vs Global Semantics
@@ -368,7 +354,7 @@ Rules:
 
 - metadata in `*.json`
 - long prompts/docs in `*.md`
-- `SKILL.md` is preserved as the skill entrypoint
+- skills use `SKILL.md` with YAML frontmatter (see [SKILLSHARE.md](./SKILLSHARE.md))
 
 ## TypeScript/Node Rationale
 
@@ -419,9 +405,11 @@ Creates `.agentctl/` in the current repo with starter config:
 - `config.json`
 - `models.json`
 - `agents/`
-- `skills/`
+- `skills/` (empty, for skillshare to read from)
 
-With `--from claude`, imports existing agent definitions from `.claude/agents/` into `.agentctl/agents/`. Skill import is not implemented.
+With `--from claude`, imports existing agent definitions from `.claude/agents/` into `.agentctl/agents/`.
+
+With `--with-skillshare`, also installs skillshare (if needed) and creates `.skillshare/config.yaml` pointing at `.agentctl/skills/`. See [SKILLSHARE.md](./SKILLSHARE.md).
 
 ### `sync`
 
@@ -446,10 +434,10 @@ Checks:
 - config validity
 - project setup
 - canonical agent count
-- canonical skill count
 - harness availability
-- unmanaged resources
+- unmanaged agents
 - sync drift
+- skillshare installation and configuration (if skills exist)
 
 ## Extensibility Rules
 
@@ -489,8 +477,8 @@ These states should be explicit in CLI output.
 ## Decisions Made
 
 - **Import from harness**: `agentctl init --from claude` is supported for agents only.
-- **Skills in v1**: Yes. v1 includes first-class skill resources using `skill.json` plus `SKILL.md`.
-- **Skill sync model**: Skills are synchronized as directory resources under harness `skills/` directories.
+- **Skill distribution**: Delegated to skillshare. agentctl creates `.agentctl/skills/` but does not sync skills to harness directories. See [SKILLSHARE.md](./SKILLSHARE.md).
+- **Skill format**: SKILL.md with YAML frontmatter (compatible with skillshare and the emerging Agent Skills standard).
 - **Plugins in v1**: No. Plugins are deferred.
 - **Memory management**: No. Runtime state remains harness-managed.
 - **Model mapping ownership**: User-owned.
@@ -501,18 +489,17 @@ These states should be explicit in CLI output.
 Keep v1 narrow:
 
 1. portable agent definitions
-2. portable skill definitions
-3. portable model class mappings
-4. `init` with starter scaffolding and `--from claude` agent import
-5. `sync` with ownership tracking and unmanaged-resource warnings
+2. portable model class mappings
+3. `init` with starter scaffolding and `--from claude` agent import
+4. `init --with-skillshare` for integrated skill setup
+5. `sync` with ownership tracking and unmanaged-resource warnings (agents only)
 6. `run`
 7. `list`
 8. `doctor`
-9. Claude Code and OpenCode adapters
 
 ## Future Work
 
-See `FUTURE.md` for later-stage plans such as plugin portability, additional harness imports, remote registries, and more advanced skill capability modeling.
+See `FUTURE.md` for later-stage plans such as plugin portability, additional harness imports, remote registries, and more.
 
 ## Recommendation
 

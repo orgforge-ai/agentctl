@@ -1,15 +1,22 @@
+import * as path from "node:path";
 import { loadConfig } from "../config/index.js";
 import { loadAgents } from "../resources/agents/index.js";
 import { getAdapter } from "../adapters/registry.js";
 import { loadSyncManifest, getManagedNames } from "../sync/state.js";
+import { listSkills } from "../skillshare/index.js";
 
 export async function runList(
   resourceKind: string,
   options: { global: boolean },
 ): Promise<void> {
+  if (resourceKind === "skills") {
+    await runListSkills(options);
+    return;
+  }
+
   if (resourceKind !== "agents") {
     console.error(`Unknown resource kind: ${resourceKind}`);
-    console.error("Available: agents");
+    console.error("Available: agents, skills");
     process.exit(1);
   }
 
@@ -79,6 +86,58 @@ export async function runHarnessList(
   for (const agent of installed.agents) {
     console.log(
       `${agent.name.padEnd(nameWidth)}  ${(agent.managed ? "yes" : "no").padEnd(7)}  ${agent.path}`,
+    );
+  }
+}
+
+async function runListSkills(options: { global: boolean }): Promise<void> {
+  const config = await loadConfig();
+
+  const projectSkills = await listSkills(
+    path.join(config.projectDir, "skills"),
+  );
+  const globalSkills = await listSkills(
+    path.join(config.globalDir, "skills"),
+  );
+
+  // Project skills shadow global by name
+  const merged = new Map<string, { name: string; description: string | null; origin: string; sourcePath: string }>();
+  for (const s of globalSkills) {
+    merged.set(s.name, { ...s, origin: "global" });
+  }
+  if (!options.global) {
+    for (const s of projectSkills) {
+      merged.set(s.name, { ...s, origin: "project" });
+    }
+  }
+
+  const entries = Array.from(merged.values());
+  if (options.global) {
+    const filtered = entries.filter((s) => s.origin === "global");
+    if (filtered.length === 0) {
+      console.log("No global skills found.");
+      return;
+    }
+    printSkillTable(filtered);
+  } else {
+    if (entries.length === 0) {
+      console.log("No skills found.");
+      return;
+    }
+    printSkillTable(entries);
+  }
+}
+
+function printSkillTable(skills: { name: string; description: string | null; origin: string; sourcePath: string }[]): void {
+  const nameWidth = Math.max(4, ...skills.map((s) => s.name.length));
+  const originWidth = Math.max(6, ...skills.map((s) => s.origin.length));
+
+  console.log(
+    `${"NAME".padEnd(nameWidth)}  ${"ORIGIN".padEnd(originWidth)}  PATH`,
+  );
+  for (const skill of skills) {
+    console.log(
+      `${skill.name.padEnd(nameWidth)}  ${skill.origin.padEnd(originWidth)}  ${skill.sourcePath}`,
     );
   }
 }

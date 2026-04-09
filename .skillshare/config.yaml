@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/runkids/skillshare/main/schemas/project-config.schema.json
+targets:
+  - name: claude
+    skills:
+      mode: symlink
+  - name: opencode
+    skills:
+      mode: symlink
+  - name: xcode-codex
+    skills:
+      mode: symlink
+audit:
+  block_threshold: CRITICAL

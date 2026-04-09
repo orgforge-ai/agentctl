@@ -8,10 +8,16 @@ import {
   writeTextFile,
   findProjectRoot,
 } from "../util/index.js";
+import {
+  ensureSkillshare,
+  writeSkillshareConfig,
+  detectTargets,
+} from "../skillshare/index.js";
 import type { AgentManifest } from "../resources/agents/schema.js";
 
 export interface InitOptions {
   from?: string;
+  withSkillshare?: boolean;
 }
 
 export async function runInit(options: InitOptions): Promise<void> {
@@ -19,6 +25,12 @@ export async function runInit(options: InitOptions): Promise<void> {
   const agentctlDir = path.join(projectRoot, ".agentctl");
 
   if (await fileExists(agentctlDir)) {
+    if (options.withSkillshare) {
+      // Ensure skills/ exists even on an existing project
+      await fs.mkdir(path.join(agentctlDir, "skills"), { recursive: true });
+      await initSkillshare(projectRoot);
+      return;
+    }
     console.log(`.agentctl/ already exists at ${projectRoot}`);
     console.log("Use agentctl sync to update harness artifacts.");
     return;
@@ -26,6 +38,7 @@ export async function runInit(options: InitOptions): Promise<void> {
 
   // Create directory structure
   await fs.mkdir(path.join(agentctlDir, "agents"), { recursive: true });
+  await fs.mkdir(path.join(agentctlDir, "skills"), { recursive: true });
 
   // Write config.json
   await writeJsonFile(path.join(agentctlDir, "config.json"), {
@@ -42,6 +55,11 @@ export async function runInit(options: InitOptions): Promise<void> {
   console.log("  config.json  - project configuration");
   console.log("  models.json  - model class mappings");
   console.log("  agents/      - agent definitions");
+  console.log("  skills/      - skill definitions (for skillshare)");
+
+  if (options.withSkillshare) {
+    await initSkillshare(projectRoot);
+  }
 
   // Import from harness if requested
   if (options.from) {
@@ -110,4 +128,18 @@ export async function runInit(options: InitOptions): Promise<void> {
       "Note: settings, memory, and CLAUDE.md were not imported (not managed by agentctl).",
     );
   }
+}
+
+async function initSkillshare(projectRoot: string): Promise<void> {
+  console.log("\nSetting up skillshare integration...");
+
+  const binPath = await ensureSkillshare();
+  console.log(`  skillshare: ${binPath}`);
+
+  const targets = await detectTargets(projectRoot);
+  await writeSkillshareConfig(projectRoot, targets);
+  console.log(`  .skillshare/config.yaml created (targets: ${targets.join(", ")})`);
+  console.log("\nNext steps:");
+  console.log("  1. Add skills to .agentctl/skills/");
+  console.log("  2. Run: skillshare sync");
 }
