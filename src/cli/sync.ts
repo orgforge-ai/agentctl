@@ -1,6 +1,6 @@
 import { loadConfig } from "../config/index.js";
 import { loadAgents, loadGlobalAgents } from "../resources/agents/index.js";
-import { getAdapter, getAllAdapters } from "../adapters/registry.js";
+import { resolveTargets } from "../adapters/registry.js";
 import { syncHarness } from "../sync/index.js";
 import { AgentctlError } from "../errors.js";
 
@@ -22,19 +22,22 @@ export async function runSync(
     return;
   }
 
-  const adapters = harnessId
-    ? [getAdapter(harnessId)].filter(Boolean)
-    : getAllAdapters();
+  const allTargets = resolveTargets(config);
+  const targets = harnessId
+    ? allTargets.filter((t) => t.id === harnessId)
+    : allTargets;
 
-  if (harnessId && adapters.length === 0) {
+  if (harnessId && targets.length === 0) {
     throw new AgentctlError(`Unknown harness: ${harnessId}`);
   }
 
-  for (const adapter of adapters) {
-    if (!adapter) continue;
-    console.log(`Syncing to ${adapter.displayName}...`);
+  for (const target of targets) {
+    const kind = target.isProfile ? "profile" : "built-in";
+    console.log(
+      `Syncing to ${target.displayName} (${kind}) → ${target.paths.projectAgentsDir}`,
+    );
 
-    const result = await syncHarness(adapter, config, agents, globalAgents, {
+    const result = await syncHarness(target, config, agents, globalAgents, {
       dryRun: options.dryRun,
       force: options.force,
     });

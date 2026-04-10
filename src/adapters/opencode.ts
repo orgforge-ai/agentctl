@@ -170,10 +170,13 @@ export class OpenCodeAdapter implements HarnessAdapter {
   }
 
   async listInstalled(context: AdapterContext): Promise<InstalledResources> {
-    const paths = this.resolveInstallPaths(context);
+    const paths = context.pathsOverride ?? this.resolveInstallPaths(context);
     const agents: InstalledResource[] = [];
 
-    for (const dir of [paths.projectAgentsDir, paths.globalAgentsDir]) {
+    const scanDirs = context.flattenToProject
+      ? [paths.projectAgentsDir]
+      : [paths.projectAgentsDir, paths.globalAgentsDir];
+    for (const dir of scanDirs) {
       if (!dir || !(await fileExists(dir))) continue;
       const entries = await fs.readdir(dir, { withFileTypes: true });
       for (const entry of entries) {
@@ -209,9 +212,26 @@ export class OpenCodeAdapter implements HarnessAdapter {
     if (agent.manifest.description)
       canonical["description"] = `"${agent.manifest.description}"`;
     if (agent.manifest.defaultModelClass) {
-      const mapping = context.models.modelClasses[agent.manifest.defaultModelClass];
-      const opencodeModel = mapping?.["opencode"];
-      if (opencodeModel) canonical["model"] = opencodeModel;
+      const cls = agent.manifest.defaultModelClass;
+      const harnessKey = context.harnessId;
+      if (!harnessKey) {
+        throw new Error(
+          `Agent "${agent.manifest.name}" needs a resolved harness id to look up model class "${cls}"`,
+        );
+      }
+      const mapping = context.models.modelClasses[cls];
+      if (!mapping) {
+        throw new Error(
+          `Agent "${agent.manifest.name}" references unknown model class "${cls}"`,
+        );
+      }
+      const model = mapping[harnessKey];
+      if (!model) {
+        throw new Error(
+          `Agent "${agent.manifest.name}" uses model class "${cls}" which has no "${harnessKey}" mapping`,
+        );
+      }
+      canonical["model"] = model;
     }
 
     const overrides = (agent.manifest.adapterOverrides?.["opencode"] ?? {}) as Record<string, unknown>;
@@ -265,7 +285,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
   }
 
   async sync(context: SyncContext): Promise<SyncResult> {
-    const paths = this.resolveInstallPaths(context);
+    const paths = context.pathsOverride ?? this.resolveInstallPaths(context);
     return syncAgents({
       agents: context.agents,
       context,
@@ -295,13 +315,14 @@ export class OpenCodeAdapter implements HarnessAdapter {
     }
 
     if (input.model) {
+      const harnessKey = input.context.harnessId;
       const mapping = input.context.models.modelClasses[input.model];
-      const opencodeModel = mapping?.["opencode"];
-      if (opencodeModel) {
-        args.push("-m", opencodeModel);
+      const model = harnessKey ? mapping?.[harnessKey] : undefined;
+      if (model) {
+        args.push("-m", model);
       } else if (!input.degradedOk) {
         throw new Error(
-          `No OpenCode mapping for model class "${input.model}"`,
+          `No "${harnessKey ?? "<unknown>"}" mapping for model class "${input.model}"`,
         );
       }
     }

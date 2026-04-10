@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { createReadStream } from "node:fs";
 import { loadConfig } from "../config/index.js";
 import { loadAgents } from "../resources/agents/index.js";
-import { getAdapter, getAdapterIds } from "../adapters/registry.js";
+import { resolveTargets } from "../adapters/registry.js";
 import { AgentctlError } from "../errors.js";
 import { fileExists } from "../util/index.js";
 
@@ -20,14 +20,15 @@ export interface RunOptions {
 }
 
 export async function runRun(options: RunOptions): Promise<void> {
-  const adapter = getAdapter(options.harness);
-  if (!adapter) {
+  const config = await loadConfig(options.cwd);
+  const targets = resolveTargets(config);
+  const target = targets.find((t) => t.id === options.harness);
+  if (!target) {
     throw new AgentctlError(
-      `Unknown harness: ${options.harness}. Available: ${getAdapterIds().join(", ")}`,
+      `Unknown harness: ${options.harness}. Available: ${targets.map((t) => t.id).join(", ")}`,
     );
   }
-
-  const config = await loadConfig(options.cwd);
+  const adapter = target.adapter;
 
   if (options.agent) {
     const agents = await loadAgents(config.globalDir, config.projectDir);
@@ -43,10 +44,11 @@ export async function runRun(options: RunOptions): Promise<void> {
     globalDir: config.globalDir,
     projectDir: config.projectDir,
     models: config.models,
+    harnessId: target.id,
   };
 
-  // Parse env flags
-  const envVars: Record<string, string> = {};
+  // Parse env flags. Profile env applies first; --env overrides win.
+  const envVars: Record<string, string> = { ...(target.runEnv ?? {}) };
   if (options.env) {
     for (const e of options.env) {
       const eqIdx = e.indexOf("=");

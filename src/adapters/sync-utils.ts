@@ -31,7 +31,11 @@ export async function syncAgents(options: SyncAgentsOptions): Promise<SyncResult
 
   for (const [name, agent] of agents) {
     const isGlobal = agent.origin === "global";
-    const targetDir = isGlobal ? globalAgentsDir : projectAgentsDir;
+    const targetDir = context.flattenToProject
+      ? projectAgentsDir
+      : isGlobal
+        ? globalAgentsDir
+        : projectAgentsDir;
 
     if (!targetDir) {
       warnings.push(
@@ -73,8 +77,11 @@ export async function syncAgents(options: SyncAgentsOptions): Promise<SyncResult
     }
   }
 
-  // Detect unmanaged agents in both directories
-  for (const dir of [projectAgentsDir, globalAgentsDir]) {
+  // Detect unmanaged agents in directories we wrote to.
+  const scanDirs = context.flattenToProject
+    ? [projectAgentsDir]
+    : [projectAgentsDir, globalAgentsDir];
+  for (const dir of scanDirs) {
     if (!dir || !(await fileExists(dir))) continue;
     const entries = await fs.readdir(dir, { withFileTypes: true });
     for (const entry of entries) {

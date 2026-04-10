@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { loadConfig } from "../config/index.js";
 import { loadAgents, loadGlobalAgents } from "../resources/agents/index.js";
-import { getAllAdapters } from "../adapters/registry.js";
+import { resolveTargets } from "../adapters/registry.js";
 import { loadSyncManifest, loadGlobalSyncManifest, getManagedNames } from "../sync/state.js";
 import { fileExists, readTextFile, contentHash } from "../util/index.js";
 import {
@@ -93,25 +93,45 @@ export async function runDoctor(): Promise<void> {
   // Check 5: harness detection
   const manifest = await loadSyncManifest(config.projectRoot);
   const globalManifest = await loadGlobalSyncManifest();
-  const adapters = getAllAdapters();
-  for (const adapter of adapters) {
-    const projectManaged = getManagedNames(manifest, adapter.id);
-    const globalManaged = getManagedNames(globalManifest, adapter.id);
+  const targets = resolveTargets(config);
+  const detectedAdapters = new Map<string, Awaited<ReturnType<typeof targets[0]["adapter"]["detect"]>>>();
+
+  for (const target of targets) {
+    const adapter = target.adapter;
+    const projectManaged = getManagedNames(manifest, target.id);
+    const globalManaged = target.isProfile
+      ? new Set<string>()
+      : getManagedNames(globalManifest, target.id);
     const context = {
       projectRoot: config.projectRoot,
       globalDir: config.globalDir,
       projectDir: config.projectDir,
       models: config.models,
       managedNames: new Set([...projectManaged, ...globalManaged]),
+      pathsOverride: target.paths,
+      flattenToProject: target.isProfile,
+      harnessId: target.id,
     };
 
-    const detection = await adapter.detect(context);
+    let detection = detectedAdapters.get(adapter.id);
+    if (!detection) {
+      detection = await adapter.detect(context);
+      detectedAdapters.set(adapter.id, detection);
+    }
+
+    const label = target.isProfile
+      ? `Harness profile: ${target.id}`
+      : `Harness: ${adapter.displayName}`;
+    const destMsg = target.isProfile
+      ? ` → ${target.paths.projectAgentsDir}`
+      : "";
     results.push({
-      name: `Harness: ${adapter.displayName}`,
+      name: label,
       status: detection.installed ? "ok" : "warn",
-      message: detection.installed
-        ? `Installed${detection.version ? ` (${detection.version})` : ""}`
-        : "Not found",
+      message:
+        (detection.installed
+          ? `Installed${detection.version ? ` (${detection.version})` : ""}`
+          : "Not found") + destMsg,
     });
 
     // List installed agents (managed and unmanaged)

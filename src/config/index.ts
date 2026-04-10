@@ -14,7 +14,15 @@ import {
 import { AgentctlError } from "../errors.js";
 
 function mergeConfigs(base: Config, override: Partial<Config>): Config {
-  return { ...base, ...override, version: base.version };
+  return {
+    ...base,
+    ...override,
+    version: base.version,
+    harnesses: {
+      ...(base.harnesses ?? {}),
+      ...(override.harnesses ?? {}),
+    },
+  };
 }
 
 function mergeModels(

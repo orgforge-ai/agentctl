@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { loadConfig } from "../config/index.js";
 import { loadAgents } from "../resources/agents/index.js";
-import { getAdapter } from "../adapters/registry.js";
+import { resolveTarget } from "../adapters/registry.js";
 import { loadSyncManifest, loadGlobalSyncManifest, getManagedNames } from "../sync/state.js";
 import { listSkills } from "../skillshare/index.js";
 import { AgentctlError } from "../errors.js";
@@ -53,17 +53,18 @@ export async function runHarnessList(
     );
   }
 
-  const adapter = getAdapter(harnessId);
-  if (!adapter) {
+  const config = await loadConfig();
+  const target = resolveTarget(harnessId, config);
+  if (!target) {
     throw new AgentctlError(`Unknown harness: ${harnessId}`);
   }
+  const adapter = target.adapter;
 
-  const config = await loadConfig();
   const projectManifest = await loadSyncManifest(config.projectRoot);
   const globalManifest = await loadGlobalSyncManifest();
   const managedNames = new Set([
-    ...getManagedNames(projectManifest, harnessId),
-    ...getManagedNames(globalManifest, harnessId),
+    ...getManagedNames(projectManifest, target.id),
+    ...(target.isProfile ? [] : getManagedNames(globalManifest, target.id)),
   ]);
   const context = {
     projectRoot: config.projectRoot,
@@ -71,6 +72,9 @@ export async function runHarnessList(
     projectDir: config.projectDir,
     models: config.models,
     managedNames,
+    pathsOverride: target.paths,
+    flattenToProject: target.isProfile,
+    harnessId: target.id,
   };
 
   const installed = await adapter.listInstalled(context);

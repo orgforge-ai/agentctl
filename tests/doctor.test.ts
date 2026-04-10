@@ -72,45 +72,55 @@ describe("runDoctor", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("does not report globally synced agents as unmanaged", async () => {
+  it("lists profile-managed agents as managed", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "agentctl-doctor-"));
     const projectRoot = path.join(tmpDir, "project");
     const homeDir = path.join(tmpDir, "home");
 
-    // Set up project with .git
     await fs.mkdir(path.join(projectRoot, ".git"), { recursive: true });
+    const profileDest = path.join(projectRoot, ".claude-test", "agents");
+    await fs.mkdir(profileDest, { recursive: true });
 
-    // Set up global agentctl config
-    await fs.mkdir(path.join(homeDir, ".agentctl", "state"), { recursive: true });
-    await fs.mkdir(path.join(homeDir, ".agentctl", "agents"), { recursive: true });
+    // Global agentctl config defines a profile target
+    await fs.mkdir(path.join(homeDir, ".agentctl"), { recursive: true });
     await fs.writeFile(
       path.join(homeDir, ".agentctl", "config.json"),
-      JSON.stringify({ version: 1 }, null, 2) + "\n",
+      JSON.stringify(
+        {
+          version: 1,
+          harnesses: {
+            "claude-test": {
+              adapter: "claude",
+              paths: { projectAgentsDir: ".claude-test/agents" },
+            },
+          },
+        },
+        null,
+        2,
+      ) + "\n",
       "utf-8",
     );
 
-    // Set up a global agent source
-    await fs.writeFile(
-      path.join(homeDir, ".agentctl", "agents", "ducky.md"),
-      "# Ducky\nA test agent.\n",
-      "utf-8",
-    );
+    // Pretend a previous sync wrote ducky into the profile dest.
+    const agentFilePath = path.join(profileDest, "ducky.md");
+    await fs.writeFile(agentFilePath, "# Ducky\n", "utf-8");
 
-    // Set up a Claude Code harness with the agent installed
-    await fs.mkdir(path.join(homeDir, ".claude", "agents"), { recursive: true });
-    const agentFilePath = path.join(homeDir, ".claude", "agents", "ducky.md");
-    await fs.writeFile(agentFilePath, "# Ducky\nA test agent.\n", "utf-8");
-
-    // Write a global sync manifest that marks ducky as managed
+    // Project-scoped manifest keyed by target id.
+    const projectKey = (await import("node:crypto"))
+      .createHash("sha256")
+      .update(projectRoot)
+      .digest("hex")
+      .slice(0, 16);
+    await fs.mkdir(path.join(homeDir, ".agentctl", "state"), { recursive: true });
     await fs.writeFile(
-      path.join(homeDir, ".agentctl", "state", "global-sync.json"),
+      path.join(homeDir, ".agentctl", "state", `${projectKey}.json`),
       JSON.stringify({
         version: 1,
-        projectId: "global",
+        projectId: projectKey,
         entries: [
           {
             agentName: "ducky",
-            harnessId: "claude",
+            harnessId: "claude-test",
             filePath: agentFilePath,
             contentHash: "abc123",
             syncedAt: new Date().toISOString(),

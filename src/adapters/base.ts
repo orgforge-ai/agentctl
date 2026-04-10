@@ -7,6 +7,10 @@ export interface AdapterContext {
   projectDir: string;
   models: ModelsConfig;
   managedNames?: Set<string>;
+  pathsOverride?: HarnessPaths;
+  flattenToProject?: boolean;
+  /** The resolved harness/target id (profile id). Used as the model-mapping key. */
+  harnessId?: string;
 }
 
 export interface DetectionResult {
@@ -67,6 +71,15 @@ export interface SyncContext extends AdapterContext {
   managedNames: Set<string>;
   dryRun: boolean;
   force: boolean;
+}
+
+export interface HarnessTarget {
+  id: string;
+  adapter: HarnessAdapter;
+  paths: HarnessPaths;
+  runEnv?: Record<string, string>;
+  isProfile: boolean;
+  displayName: string;
 }
 
 export interface SyncFileAction {
