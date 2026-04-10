@@ -177,6 +177,29 @@ Example:
 }
 ```
 
+Per-harness entries may be either a plain string or a structured object. The
+structured form lets a model class carry harness-specific frontmatter (e.g.
+OpenCode reasoning settings) that gets merged into rendered agent files:
+
+```json
+{
+  "modelClasses": {
+    "reasoning": {
+      "opencode": {
+        "model": "openai/gpt-5.4",
+        "frontmatter": {
+          "reasoning_effort": "high"
+        }
+      }
+    }
+  }
+}
+```
+
+Both forms are interchangeable: string mappings are normalized to
+`{ "model": "…" }` at load time. Frontmatter from `models.json` takes
+precedence over agent-level adapter overrides.
+
 Important constraints:
 
 - portable classes should be semantic, not marketing-derived

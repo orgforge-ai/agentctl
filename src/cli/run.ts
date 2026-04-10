@@ -20,7 +20,7 @@ export interface RunOptions {
 }
 
 export async function runRun(options: RunOptions): Promise<void> {
-  const config = await loadConfig(options.cwd);
+  const config = await loadConfig();
   const targets = resolveTargets(config);
   const target = targets.find((t) => t.id === options.harness);
   if (!target) {

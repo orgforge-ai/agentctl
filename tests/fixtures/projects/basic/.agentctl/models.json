@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "modelClasses": {
+    "small": {
+      "claude": "haiku",
+      "opencode": "opencode/big-pickle"
+    },
+    "medium": {
+      "claude": "haiku",
+      "opencode": "opencode/big-pickle"
+    },
+    "large": {
+      "claude": "haiku",
+      "opencode": "opencode/big-pickle"
+    },
+    "planning": {
+      "claude": "haiku",
+      "opencode": "opencode/big-pickle"
+    },
+    "editing": {
+      "claude": "haiku",
+      "opencode": "opencode/big-pickle"
+    },
+    "reasoning": {
+      "claude": "haiku",
+      "opencode": "opencode/big-pickle"
+    }
+  }
+}

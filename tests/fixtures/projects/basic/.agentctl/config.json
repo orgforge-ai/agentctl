@@ -1,3 +1,17 @@
 {
-  "version": 1
+  "version": 1,
+  "harnesses": {
+    "claude": {
+      "adapter": "claude",
+      "paths": {
+        "projectAgentsDir": ".claude/agents"
+      }
+    },
+    "opencode": {
+      "adapter": "opencode",
+      "paths": {
+        "projectAgentsDir": ".opencode/agents"
+      }
+    }
+  }
 }

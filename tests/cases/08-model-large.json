@@ -5,10 +5,10 @@
   "skipLive": true,
   "expected": {
     "claude": {
-      "dryRun": "--model opus"
+      "dryRun": "--model haiku"
     },
     "opencode": {
-      "dryRun": "-m anthropic/claude-opus-4-6"
+      "dryRun": "-m opencode/big-pickle"
     }
   }
 }

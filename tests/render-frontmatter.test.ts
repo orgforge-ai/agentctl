@@ -5,7 +5,10 @@ import { OpenCodeAdapter } from "../src/adapters/opencode.js";
 import type { Agent } from "../src/resources/agents/schema.js";
 import type { AdapterContext } from "../src/adapters/base.js";
 
-function makeContext(harnessId: string): AdapterContext {
+function makeContext(
+  harnessId: string,
+  modelFrontmatter?: Record<string, unknown>,
+): AdapterContext {
   return {
     projectRoot: "/tmp/test",
     globalDir: "/tmp/global",
@@ -15,8 +18,13 @@ function makeContext(harnessId: string): AdapterContext {
       version: 1,
       modelClasses: {
         planning: {
-          "claude-test": "opus",
-          "opencode-test": "anthropic/claude-opus-4-6",
+          "claude-test": { model: "opus" },
+          "opencode-test": modelFrontmatter
+            ? {
+                model: "anthropic/claude-opus-4-6",
+                frontmatter: modelFrontmatter,
+              }
+            : { model: "anthropic/claude-opus-4-6" },
         },
       },
     },
@@ -148,6 +156,46 @@ describe("renderAgent frontmatter", () => {
       assert.ok(file.content.includes("temperature: 0.5"));
       assert.ok(!lines.some((l) => l.startsWith("color:")));
       assert.ok(!lines.some((l) => l.startsWith("mode:")));
+    });
+
+    it("legacy string-shaped mapping still sets model", async () => {
+      const agent = makeAgent({});
+      const [file] = await adapter.renderAgent({ agent, context: opencodeContext });
+      assert.ok(file.content.includes("model: anthropic/claude-opus-4-6"));
+    });
+
+    it("structured mapping sets model", async () => {
+      const ctx = makeContext("opencode-test", { reasoning_effort: "high" });
+      const agent = makeAgent({});
+      const [file] = await adapter.renderAgent({ agent, context: ctx });
+      assert.ok(file.content.includes("model: anthropic/claude-opus-4-6"));
+    });
+
+    it("structured mapping injects scalar frontmatter fields", async () => {
+      const ctx = makeContext("opencode-test", { reasoning_effort: "high" });
+      const agent = makeAgent({});
+      const [file] = await adapter.renderAgent({ agent, context: ctx });
+      assert.ok(file.content.includes('reasoning_effort: "high"'));
+    });
+
+    it("structured mapping injects nested frontmatter fields", async () => {
+      const ctx = makeContext("opencode-test", {
+        reasoning: { effort: "high", summary: "auto" },
+      });
+      const agent = makeAgent({});
+      const [file] = await adapter.renderAgent({ agent, context: ctx });
+      assert.ok(file.content.includes("reasoning:"));
+      assert.ok(file.content.includes('  effort: "high"'));
+      assert.ok(file.content.includes('  summary: "auto"'));
+    });
+
+    it("models.json frontmatter wins over agent adapter overrides", async () => {
+      const ctx = makeContext("opencode-test", { temperature: 0.1 });
+      const agent = makeAgent({ temperature: 0.9 });
+      const [file] = await adapter.renderAgent({ agent, context: ctx });
+      const lines = file.content.split("\n").filter((l) => l.startsWith("temperature:"));
+      assert.equal(lines.length, 1);
+      assert.ok(lines[0].includes("0.1"));
     });
   });
 });

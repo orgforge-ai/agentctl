@@ -125,7 +125,11 @@ agentctl run --harness claude --agent reviewer --headless --prompt "hello" --dry
 
 - `agentctl run --headless` requires `--prompt` or `--prompt-file`.
 - `--model` accepts portable model classes such as `small`, `medium`, and `large`,
-  which are mapped per harness via `.agentctl/models.json`.
+  which are mapped per harness via `.agentctl/models.json`. Each harness entry
+  may be a plain model-id string or a structured object of the form
+  `{ "model": "provider/id", "frontmatter": { … } }`, which lets OpenCode
+  model classes attach extra frontmatter (e.g. `reasoning_effort`) to
+  generated agent files.
 - `agentctl init --from <harness>` imports existing agents from a supported
   harness into `.agentctl/`.
 - `skills/` is created during init, but skill distribution is handled separately

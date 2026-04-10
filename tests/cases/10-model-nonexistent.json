@@ -5,11 +5,11 @@
   "skipDryRun": true,
   "expected": {
     "claude": {
-      "error": "No Claude mapping for model class \"nonexistent\"",
+      "error": "No \"claude\" mapping for model class \"nonexistent\"",
       "exitCode": 1
     },
     "opencode": {
-      "error": "No OpenCode mapping for model class \"nonexistent\"",
+      "error": "No \"opencode\" mapping for model class \"nonexistent\"",
       "exitCode": 1
     }
   }

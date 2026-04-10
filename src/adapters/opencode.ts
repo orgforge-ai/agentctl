@@ -211,6 +211,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
     const canonical: Record<string, string> = {};
     if (agent.manifest.description)
       canonical["description"] = `"${agent.manifest.description}"`;
+    let modelFrontmatter: Record<string, unknown> = {};
     if (agent.manifest.defaultModelClass) {
       const cls = agent.manifest.defaultModelClass;
       const harnessKey = context.harnessId;
@@ -225,16 +226,18 @@ export class OpenCodeAdapter implements HarnessAdapter {
           `Agent "${agent.manifest.name}" references unknown model class "${cls}"`,
         );
       }
-      const model = mapping[harnessKey];
-      if (!model) {
+      const entry = mapping[harnessKey];
+      if (!entry) {
         throw new Error(
           `Agent "${agent.manifest.name}" uses model class "${cls}" which has no "${harnessKey}" mapping`,
         );
       }
-      canonical["model"] = model;
+      canonical["model"] = entry.model;
+      if (entry.frontmatter) modelFrontmatter = entry.frontmatter;
     }
 
-    const overrides = (agent.manifest.adapterOverrides?.["opencode"] ?? {}) as Record<string, unknown>;
+    const adapterOverrides = (agent.manifest.adapterOverrides?.["opencode"] ?? {}) as Record<string, unknown>;
+    const overrides: Record<string, unknown> = { ...adapterOverrides, ...modelFrontmatter };
     const fmLines = buildFrontmatterLines(canonical, overrides);
 
     if (fmLines.length > 0) {
@@ -317,7 +320,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
     if (input.model) {
       const harnessKey = input.context.harnessId;
       const mapping = input.context.models.modelClasses[input.model];
-      const model = harnessKey ? mapping?.[harnessKey] : undefined;
+      const model = harnessKey ? mapping?.[harnessKey]?.model : undefined;
       if (model) {
         args.push("-m", model);
       } else if (!input.degradedOk) {
