@@ -78,7 +78,7 @@ const profileConfig = {
       },
       run: {
         env: {
-          OPENCODE_CONFIG: "/tmp/opencode-zai.json",
+          OPENCODE_CONFIG_DIR: "~/.config/opencode-zai",
         },
       },
     },
@@ -115,7 +115,7 @@ describe("OpenCode profile sync", () => {
       assert.equal(profile!.isProfile, true);
       assert.equal(profile!.paths.projectAgentsDir, fx.profileDest);
       assert.deepEqual(profile!.runEnv, {
-        OPENCODE_CONFIG: "/tmp/opencode-zai.json",
+        OPENCODE_CONFIG_DIR: path.join(fx.homeDir, ".config", "opencode-zai"),
       });
     } finally {
       await fs.rm(fx.tmpDir, { recursive: true, force: true });

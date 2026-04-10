@@ -65,11 +65,19 @@ export function resolveTargets(config: ResolvedConfig): HarnessTarget[] {
       projectAgentsDir: projectDir,
       globalAgentsDir: globalDir,
     };
+    const runEnv = profile.run?.env
+      ? Object.fromEntries(
+          Object.entries(profile.run.env).map(([key, value]) => [
+            key,
+            expandHome(value),
+          ]),
+        )
+      : undefined;
     targets.push({
       id,
       adapter,
       paths,
-      runEnv: profile.run?.env,
+      runEnv,
       isProfile: true,
       displayName: `${adapter.displayName} [${id}]`,
     });
