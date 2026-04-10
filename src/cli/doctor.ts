@@ -21,12 +21,31 @@ interface CheckResult {
 export async function runDoctor(): Promise<void> {
   const results: CheckResult[] = [];
   const config = await loadConfig();
+  const globalConfigPath = path.join(config.globalDir, "config.json");
+  const globalModelsPath = path.join(config.globalDir, "models.json");
+  const projectConfigPath = path.join(config.projectDir, "config.json");
+  const projectModelsPath = path.join(config.projectDir, "models.json");
+  const configSources = ["built-in defaults"];
+
+  if (
+    (await fileExists(globalConfigPath)) ||
+    (await fileExists(globalModelsPath))
+  ) {
+    configSources.push(`global (${config.globalDir})`);
+  }
+
+  if (
+    (await fileExists(projectConfigPath)) ||
+    (await fileExists(projectModelsPath))
+  ) {
+    configSources.push(`project (${config.projectDir})`);
+  }
 
   // Check 1: config validity
   results.push({
     name: "Config",
     status: "ok",
-    message: `Loaded from ${config.projectDir}`,
+    message: `Loaded ${configSources.join(" + ")}`,
   });
 
   // Check 2: project .agentctl exists
@@ -73,14 +92,17 @@ export async function runDoctor(): Promise<void> {
 
   // Check 5: harness detection
   const manifest = await loadSyncManifest(config.projectRoot);
+  const globalManifest = await loadGlobalSyncManifest();
   const adapters = getAllAdapters();
   for (const adapter of adapters) {
+    const projectManaged = getManagedNames(manifest, adapter.id);
+    const globalManaged = getManagedNames(globalManifest, adapter.id);
     const context = {
       projectRoot: config.projectRoot,
       globalDir: config.globalDir,
       projectDir: config.projectDir,
       models: config.models,
-      managedNames: getManagedNames(manifest, adapter.id),
+      managedNames: new Set([...projectManaged, ...globalManaged]),
     };
 
     const detection = await adapter.detect(context);
@@ -92,22 +114,17 @@ export async function runDoctor(): Promise<void> {
         : "Not found",
     });
 
-    // Check for unmanaged agents
+    // List installed agents (managed and unmanaged)
     if (detection.installed) {
-      const unmanaged = await adapter.listUnmanaged(context);
-      if (unmanaged.length > 0) {
+      const installed = await adapter.listInstalled(context);
+      for (const agent of installed.agents) {
         results.push({
-          name: `  Unmanaged (${adapter.id})`,
-          status: "warn",
-          message: `${unmanaged.length} unmanaged agent(s)`,
+          name: `  ${agent.name}`,
+          status: agent.managed ? "ok" : "warn",
+          message: agent.managed
+            ? `managed  ${agent.path}`
+            : `unmanaged  ${agent.path}`,
         });
-        for (const u of unmanaged) {
-          results.push({
-            name: `    ${u.name}`,
-            status: "warn",
-            message: u.path,
-          });
-        }
       }
     }
   }
@@ -141,7 +158,6 @@ export async function runDoctor(): Promise<void> {
   }
 
   // Check 6b: global sync drift
-  const globalManifest = await loadGlobalSyncManifest();
   let globalDriftCount = 0;
   for (const entry of globalManifest.entries) {
     const content = await readTextFile(entry.filePath);
