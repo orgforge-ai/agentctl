@@ -32,6 +32,8 @@ The main commands are:
 - `agentctl run` to launch a harness interactively or headlessly
 - `agentctl doctor` to check config, harness detection, and sync drift
 
+Each command supports `--help` for full option details.
+
 ## Quick Start
 
 Initialize a repo:
@@ -76,23 +78,38 @@ Review the current changes for correctness, regressions, and test gaps.
 Prefer concrete findings over summaries.
 ```
 
+Initialize with skillshare integration for skill distribution:
+
+```bash
+agentctl init --with-skillshare
+```
+
+Import agents from an existing harness:
+
+```bash
+agentctl init --from claude
+```
+
 Sync that portable definition into every detected harness:
 
 ```bash
 agentctl sync
 ```
 
-Or target one harness:
+Or target one harness, with optional flags:
 
 ```bash
 agentctl sync claude
-agentctl sync opencode
+agentctl sync --dry-run      # preview changes without writing
+agentctl sync --force        # overwrite conflicting unmanaged agents
 ```
 
 Inspect what `agentctl` sees:
 
 ```bash
 agentctl list agents
+agentctl list skills
+agentctl list agents --global
 agentctl harness list claude agents
 agentctl doctor
 ```
@@ -115,10 +132,28 @@ Use a prompt file instead of inline text:
 agentctl run --harness claude --headless --agent reviewer --prompt-file ./task.txt
 ```
 
+Set environment variables for the harness process:
+
+```bash
+agentctl run --harness claude --headless --prompt "hello" --env FOO=bar --env BAZ=qux
+```
+
+Set a working directory:
+
+```bash
+agentctl run --harness claude --headless --prompt "hello" --cwd /path/to/project
+```
+
 Preview the exact launch command without executing it:
 
 ```bash
 agentctl run --harness claude --agent reviewer --headless --prompt "hello" --dry-run
+```
+
+Allow degraded execution when a harness lacks full capability support:
+
+```bash
+agentctl run --harness claude --model nonexistent --degraded-ok
 ```
 
 ## Usage Notes
@@ -130,8 +165,24 @@ agentctl run --harness claude --agent reviewer --headless --prompt "hello" --dry
   `{ "model": "provider/id", "frontmatter": { … } }`, which lets OpenCode
   model classes attach extra frontmatter (e.g. `reasoning_effort`) to
   generated agent files.
+- `--env KEY=VALUE` sets environment variables for the spawned harness process.
+  Multiple `--env` flags accumulate. The first `=` is the delimiter — values may
+  contain `=` (e.g. `--env FOO=bar=baz`). Empty values are allowed (`--env FOO=`).
+  Profile-level env vars from `.agentctl/config.json` apply first; `--env` flags
+  override them.
+- `--cwd <dir>` sets the working directory for the harness process.
+- `--degraded-ok` allows execution to proceed even when the harness does not
+  fully support the requested mode (e.g. headless on a harness that doesn't
+  advertise it) or when a model class mapping is missing.
+- `--dry-run` is available on both `sync` and `run` commands to preview actions
+  without making changes or executing the harness.
+- `sync --force` overwrites conflicting unmanaged agents in harness directories.
 - `agentctl init --from <harness>` imports existing agents from a supported
   harness into `.agentctl/`.
+- `agentctl init --with-skillshare` installs skillshare (if needed) and creates
+  `.skillshare/config.yaml` pointing at `.agentctl/skills/`.
+- `agentctl list` supports both `agents` and `skills` as resource kinds. Use
+  `--global` to show only global resources.
 - `skills/` is created during init, but skill distribution is handled separately
   through skillshare integration.
 - `agentctl doctor` is the fastest way to check whether a repo is initialized,

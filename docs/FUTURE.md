@@ -7,10 +7,28 @@ This document covers features deferred from the current implementation in `DESIG
 See [SKILLSHARE.md](./SKILLSHARE.md) for the full design. Implemented in `src/skillshare/index.ts`:
 
 - `agentctl init --with-skillshare` — detects/downloads skillshare, creates `.skillshare/config.yaml` with `source: .agentctl/skills`, auto-detects targets
-- Skillshare binary management — downloads pinned version to `~/.agentctl/bin/skillshare` if not on PATH, prefers system install
+- Skillshare binary management — downloads pinned version via install script if not on PATH, prefers system install
 - `agentctl doctor` skillshare checks — verifies skillshare is installed, `.skillshare/config.yaml` exists and points at `.agentctl/skills/`, warns if skills exist but aren't synced
 - `agentctl list skills` — reads `.agentctl/skills/` directories and lists names from SKILL.md frontmatter
 - `agentctl init` now creates `skills/` directory alongside `agents/`
+
+## Stage 2b: OpenCode Model Metadata (Done)
+
+See [OPENCODE_MODEL_METADATA_PLAN.md](./OPENCODE_MODEL_METADATA_PLAN.md) for the full design. Implemented in `src/config/schema.ts` and `src/adapters/opencode.ts`:
+
+- `ModelEntrySchema` supports both string and `{ model, frontmatter }` object forms
+- String entries normalized to `{ model: "..." }` at load time via Zod transform
+- OpenCode adapter merges model-class frontmatter into rendered agent files
+- Frontmatter from `models.json` takes precedence over agent-level adapter overrides
+
+## Stage 2c: OpenCode Profile Sync (Done)
+
+See [OPENCODE_PROFILE_SYNC_PLAN.md](./OPENCODE_PROFILE_SYNC_PLAN.md) for the full design. Implemented in `src/config/schema.ts`, `src/adapters/registry.ts`, and `src/sync/index.ts`:
+
+- Harness profiles in config define custom paths and run-time env for named targets
+- Profile targets flatten all agents (global + project) to `projectAgentsDir`
+- `agentctl run -h <profile>` applies profile env overrides
+- Registry resolves profiles to adapter instances with custom paths
 
 ## Stage 3: Plugins
 

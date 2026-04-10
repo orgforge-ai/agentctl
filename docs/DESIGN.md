@@ -120,13 +120,14 @@ Portable unit describing a named agent persona or role.
 
 Example fields:
 
-- `name`
+- `version` (required, default 1)
+- `name` (required, must match `^[a-zA-Z0-9_-]+$`)
 - `description`
 - `defaultModelClass`
-- `capabilities`
-- `tools`
-- `executionHints`
-- `adapterOverrides`
+- `capabilities` (string array)
+- `tools` (string array)
+- `executionHints` (record of arbitrary key-value pairs)
+- `adapterOverrides` (nested record keyed by adapter id)
 
 ### Skills
 
@@ -146,6 +147,8 @@ Merge rules:
 - scalar project values override global values
 - named resources shadow by name at the project level
 - adapter-specific arrays are replace, not append, unless explicitly marked mergeable
+- model classes merge per-class: each class is a record of harness→model mappings that deep-merges across layers
+- harness profiles deep-merge across layers (project profiles override global profiles by key)
 
 ## Models
 
@@ -220,6 +223,7 @@ Suggested interface shape:
 ```ts
 export interface HarnessAdapter {
   id: string;
+  displayName: string;
   detect(context: AdapterContext): Promise<DetectionResult>;
   capabilities(): HarnessCapabilities;
   resolveInstallPaths(context: AdapterContext): HarnessPaths;
@@ -254,6 +258,38 @@ type HarnessCapabilities = {
 ```
 
 Skills are managed by skillshare, not by adapter sync. See [SKILLSHARE.md](./SKILLSHARE.md).
+
+### Harness Profiles
+
+Config may define named harness profiles that extend a built-in adapter with custom paths and run-time settings:
+
+```json
+{
+  "harnesses": {
+    "opencode-zai": {
+      "adapter": "opencode",
+      "paths": {
+        "projectAgentsDir": ".opencode-zai/agents",
+        "globalAgentsDir": "~/.config/opencode-zai/agents"
+      },
+      "run": {
+        "env": {
+          "OPENCODE_CONFIG": "/path/to/opencode-zai.json"
+        }
+      }
+    }
+  }
+}
+```
+
+Profile resolution:
+
+- `adapter` specifies which built-in adapter to use (e.g. `"opencode"`).
+- `paths.projectAgentsDir` is required; `paths.globalAgentsDir` is optional.
+- `run.env` sets environment variables applied during `agentctl run`. CLI `--env` flags override profile env.
+- Profile targets flatten all agents (global + project) to `projectAgentsDir` to avoid multi-directory conflicts.
+
+See [OPENCODE_PROFILE_SYNC_PLAN.md](./OPENCODE_PROFILE_SYNC_PLAN.md) for the design rationale.
 
 ## Sync Model
 
@@ -318,14 +354,14 @@ agentctl run -h opencode --headless --prompt-file task.txt
 
 Normalized flags:
 
-- `--harness`
+- `--harness` (required)
 - `--agent`
 - `--model`
 - `--headless`
 - `--prompt`
 - `--prompt-file`
 - `--cwd`
-- `--env`
+- `--env` (repeatable, `KEY=VALUE` format)
 - `--dry-run`
 - `--degraded-ok`
 
@@ -403,13 +439,35 @@ Current layout:
 ```text
 src/
   adapters/
+    base.ts          HarnessAdapter interface and shared types
+    claude.ts        Claude Code adapter
+    opencode.ts      OpenCode adapter
+    registry.ts      Adapter registration and target resolution
+    sync-utils.ts    Shared sync logic
   cli/
+    index.ts         Commander entry point
+    init.ts          agentctl init
+    sync.ts          agentctl sync
+    run.ts           agentctl run
+    list.ts          agentctl list / harness list
+    doctor.ts        agentctl doctor
   config/
+    schema.ts        Zod schemas for config and models
+    defaults.ts      Built-in default values
+    index.ts         Config loading and merging
   resources/
     agents/
-    skills/
+      schema.ts      AgentManifest schema and Agent type
+      index.ts       Agent loading (global + project)
+    skills/          (empty — managed by skillshare)
   sync/
+    index.ts         Sync orchestration
+    state.ts         Sync manifest tracking (content hashes, file index)
+  skillshare/
+    index.ts         Skillshare binary management and skill listing
   util/
+    index.ts         File I/O, hashing, path resolution
+  errors.ts          AgentctlError base class
 ```
 
 ## Command Surface
@@ -417,10 +475,10 @@ src/
 Current command structure:
 
 ```bash
-agentctl init [--from claude]
-agentctl sync [harness]
+agentctl init [--from <harness>] [--with-skillshare]
+agentctl sync [harness] [--dry-run] [--force]
 agentctl run --harness <name> [options]
-agentctl list <resource-kind>
+agentctl list <resource-kind> [--global]
 agentctl harness list <harness> <resource-kind>
 agentctl doctor
 ```
@@ -434,13 +492,18 @@ Creates `.agentctl/` in the current repo with starter config:
 - `agents/`
 - `skills/` (empty, for skillshare to read from)
 
-With `--from claude`, imports existing agent definitions from `.claude/agents/` into `.agentctl/agents/`.
+With `--from <harness>`, imports existing agent definitions from the harness's native agents directory into `.agentctl/agents/`.
 
 With `--with-skillshare`, also installs skillshare (if needed) and creates `.skillshare/config.yaml` pointing at `.agentctl/skills/`. See [SKILLSHARE.md](./SKILLSHARE.md).
 
 ### `sync`
 
 Generates harness-native artifacts from canonical config. Reports unmanaged agents and unmanaged skills.
+
+Flags:
+
+- `--dry-run` — preview changes without writing
+- `--force` — overwrite conflicting unmanaged agents
 
 ### `run`
 
