@@ -181,8 +181,9 @@ Example:
 ```
 
 Per-harness entries may be either a plain string or a structured object. The
-structured form lets a model class carry harness-specific frontmatter (e.g.
-OpenCode reasoning settings) that gets merged into rendered agent files:
+structured form lets a model class carry harness-specific frontmatter that
+gets merged into rendered agent files. The most common use case is pinning
+an OpenCode model *variant* for reasoning-capable models:
 
 ```json
 {
@@ -191,7 +192,7 @@ OpenCode reasoning settings) that gets merged into rendered agent files:
       "opencode": {
         "model": "openai/gpt-5.4",
         "frontmatter": {
-          "reasoning_effort": "high"
+          "variant": "xhigh"
         }
       }
     }
@@ -202,6 +203,59 @@ OpenCode reasoning settings) that gets merged into rendered agent files:
 Both forms are interchangeable: string mappings are normalized to
 `{ "model": "…" }` at load time. Frontmatter from `models.json` takes
 precedence over agent-level adapter overrides.
+
+### OpenCode Reasoning via Variants
+
+OpenCode auto-generates model *variants* for any provider model that
+reports `capabilities.reasoning = true`. A variant is a named preset of
+provider-specific reasoning options that the user (or an agent) selects
+by name rather than by configuring raw keys.
+
+For the OpenAI (`@ai-sdk/openai`) and GitHub Copilot (`@ai-sdk/github-copilot`)
+SDKs, the gpt-5 family typically exposes variants named:
+
+- `none`, `minimal`, `low`, `medium`, `high`, `xhigh`
+
+The exact set depends on the model id and release date — `xhigh` requires
+a recent model. Providers like Google, Anthropic, and xAI expose their own
+variant sets (`high`, `max`, etc.) with provider-appropriate option shapes.
+Models without reasoning capability (several glm/kimi/minimax/qwen
+variants) have no variants and ignore the `variant` field. Consult
+`opencode/src/provider/transform.ts` for the authoritative per-SDK list.
+
+Agents pick a variant with a top-level `variant` field in their config or
+frontmatter:
+
+```yaml
+---
+model: openai/gpt-5.4
+variant: xhigh
+---
+```
+
+The variant only applies when the runtime model resolves to the same
+provider and model id the agent configured. If the user swaps models at
+runtime, the variant is dropped — this is by design.
+
+Because variants are a semantic knob, prefer encoding them into a named
+portable model class (e.g. `large` → `variant: medium`, `planning` →
+`variant: high`, `reasoning` → `variant: xhigh`) rather than baking them
+into individual agents. Agents should ask for a semantic class; the class
+decides the budget.
+
+User-defined variants in `opencode.json` under
+`provider.<name>.models.<model>.variants.<name>` deep-merge with the
+auto-generated ones, so projects can override or extend the built-in set
+without replacing it. Agentctl does not ship variant definitions itself.
+
+### Raw Provider Option Passthrough
+
+For provider options that are *not* reasoning-related (e.g. `temperature`,
+`top_p`, `steps`, `permission`), OpenCode treats any extra keys in an
+agent's frontmatter as passthrough and forwards them to the provider as
+model options. The structured `frontmatter` block in a model class can
+carry those keys the same way it carries `variant`. Prefer variants over
+raw passthrough for anything the variant mechanism already covers.
 
 Important constraints:
 

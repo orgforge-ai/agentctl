@@ -334,7 +334,7 @@ export class OpenCodeAdapter implements HarnessAdapter {
       command: "opencode",
       args,
       env: input.env,
-      cwd: input.cwd ?? input.context.projectRoot,
+      cwd: input.cwd,
       promptFile,
     };
   }
