@@ -6,6 +6,10 @@ VERSION="${AGENTCTL_VERSION:-latest}"
 INSTALL_BIN_DIR="${AGENTCTL_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 INSTALL_SHARE_DIR="${AGENTCTL_INSTALL_SHARE_DIR:-$HOME/.local/share/agentctl}"
 
+tmpdir=""
+cleanup() { [ -n "$tmpdir" ] && rm -rf "$tmpdir"; }
+trap cleanup EXIT
+
 fail() {
   echo "agentctl install: $*" >&2
   exit 1
@@ -73,9 +77,7 @@ main() {
 
   local artifact="agentctl-linux.tar.gz"
   local download_url="https://github.com/$REPO/releases/download/$resolved_version/$artifact"
-  local tmpdir
   tmpdir="$(mktemp -d)"
-  trap 'rm -rf "$tmpdir"' EXIT
 
   echo "Downloading $download_url"
   curl -fsSL "$download_url" -o "$tmpdir/$artifact"
