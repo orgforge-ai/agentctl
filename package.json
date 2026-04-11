@@ -1,6 +1,6 @@
 {
   "name": "agentctl",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Portable control plane for coding-agent harnesses",
   "type": "module",
   "bin": {
